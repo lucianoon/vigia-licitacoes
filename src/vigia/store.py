@@ -19,6 +19,16 @@ CREATE TABLE IF NOT EXISTS vistos (
 )
 """
 
+SCHEMA_METRICAS = """
+CREATE TABLE IF NOT EXISTS metricas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    perfil TEXT NOT NULL,
+    evento TEXT NOT NULL,
+    detalhe TEXT NOT NULL DEFAULT '',
+    criado_em TEXT NOT NULL
+)
+"""
+
 INTERVALO_LEMBRETE = timedelta(hours=24)
 
 
@@ -31,7 +41,7 @@ class Store:
     def _conectar(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.caminho)
         con.execute(SCHEMA_VISTOS)
-        # Migracao: schema antigo → novo (colunas adicionais)
+        con.execute(SCHEMA_METRICAS)
         try:
             con.execute("SELECT semana FROM vistos LIMIT 1")
         except sqlite3.OperationalError:
@@ -96,6 +106,71 @@ class Store:
             ],
         )
         self._con.commit()
+
+    def registrar_metrica(self, perfil: str, evento: str, detalhe: str = "") -> None:
+        agora = datetime.now().isoformat(timespec="seconds")
+        self._con.execute(
+            "INSERT INTO metricas (perfil, evento, detalhe, criado_em) VALUES (?, ?, ?, ?)",
+            (perfil, evento, detalhe, agora),
+        )
+        self._con.commit()
+
+    def metricas(
+        self, perfil: str | None = None, dias: int = 30
+    ) -> dict[str, Any]:
+        desde = (datetime.now() - timedelta(days=dias)).isoformat(timespec="seconds")
+        if perfil:
+            linhas = self._con.execute(
+                "SELECT evento, COUNT(*) FROM metricas "
+                "WHERE perfil = ? AND criado_em >= ? GROUP BY evento",
+                (perfil, desde),
+            ).fetchall()
+        else:
+            linhas = self._con.execute(
+                "SELECT evento, COUNT(*) FROM metricas WHERE criado_em >= ? GROUP BY evento",
+                (desde,),
+            ).fetchall()
+        return {row[0]: row[1] for row in linhas}
+
+    def metricas_por_perfil(self, dias: int = 30) -> dict[str, dict[str, int]]:
+        desde = (datetime.now() - timedelta(days=dias)).isoformat(timespec="seconds")
+        linhas = self._con.execute(
+            "SELECT perfil, evento, COUNT(*) FROM metricas "
+            "WHERE criado_em >= ? GROUP BY perfil, evento",
+            (desde,),
+        ).fetchall()
+        resultado: dict[str, dict[str, int]] = {}
+        for perfil, evento, count in linhas:
+            resultado.setdefault(perfil, {})[evento] = count
+        return resultado
+
+    def historico_alertas(
+        self, perfil: str | None = None, limite: int = 100
+    ) -> list[dict[str, Any]]:
+        if perfil:
+            linhas = self._con.execute(
+                "SELECT controle, visto_em, semana, objeto, valor, regra FROM vistos "
+                "WHERE perfil = ? AND alertado = 1 ORDER BY visto_em DESC LIMIT ?",
+                (perfil, limite),
+            ).fetchall()
+        else:
+            linhas = self._con.execute(
+                "SELECT controle, visto_em, semana, objeto, valor, regra, perfil FROM vistos "
+                "WHERE alertado = 1 ORDER BY visto_em DESC LIMIT ?",
+                (limite,),
+            ).fetchall()
+        return [
+            {
+                "controle": row[0],
+                "visto_em": row[1],
+                "semana": row[2],
+                "objeto": row[3],
+                "valor": row[4],
+                "regra": row[5],
+                **({"perfil": row[6]} if len(row) > 6 else {}),
+            }
+            for row in linhas
+        ]
 
     def resumo_semanal(self, perfil: str | None = None) -> list[dict[str, Any]]:
         semana = datetime.now().strftime("%G-W%V")

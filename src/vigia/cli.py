@@ -5,10 +5,12 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from typing import Any
 
 from vigia import llm, matcher, notify, pncp
+from vigia.cache import CachePncp
 from vigia.config import Config, Perfil
 from vigia.matcher import ResultadoRegra
 from vigia.store import Store
@@ -28,8 +30,12 @@ def _token_telegram() -> str:
     token = os.environ.get("TELEGRAM_TOKEN")
     if not token:
         print(
-            "Erro: variavel de ambiente TELEGRAM_TOKEN nao definida.\n"
-            "Crie um bot com @BotFather no Telegram e exporte o token.",
+            "Erro: variavel de ambiente TELEGRAM_TOKEN nao definida.\n\n"
+            "Para configurar:\n"
+            "  1. Abra o Telegram e fale com @BotFather\n"
+            "  2. Envie /newbot e copie o token\n"
+            "  3. export TELEGRAM_TOKEN=\"SEU_TOKEN_AQUI\"\n\n"
+            "Depois volte e execute novamente.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -39,13 +45,22 @@ def _token_telegram() -> str:
 def _carregar_config(caminho: str | None) -> Config:
     try:
         return Config.carregar(caminho)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"Erro: {exc}", file=sys.stderr)
+    except FileNotFoundError as exc:
+        print(
+            f"Erro: {exc}\n\n"
+            "Para criar a configuracao:\n"
+            "  cp vigia.example.yaml vigia.yaml\n"
+            "  vim vigia.yaml  # edite regras, chat_id, segmento",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    except ValueError as exc:
+        print(f"Erro na configuracao: {exc}", file=sys.stderr)
         sys.exit(2)
 
 
 async def _fetch_publicacoes(
-    config: Config, dias: int
+    config: Config, dias: int, cache: CachePncp | None = None
 ) -> list[dict[str, Any]]:
     todas_modalidades: set[int] = set()
     for perfil in config.perfis_resolvidos():
@@ -56,7 +71,7 @@ async def _fetch_publicacoes(
     print(f"Consultando PNCP ({inicio} a {fim})...")
     try:
         publicacoes = await pncp.buscar_publicacoes(
-            inicio, fim, sorted(todas_modalidades)
+            inicio, fim, sorted(todas_modalidades), cache=cache
         )
     except pncp.PncpError as exc:
         print(f"Erro ao consultar o PNCP: {exc}", file=sys.stderr)
@@ -106,13 +121,19 @@ def _processar_perfil(
 
 
 async def _rodar(
-    caminho: str | None, dias: int, seco: bool = False, nome_perfil: str | None = None
+    caminho: str | None,
+    dias: int,
+    seco: bool = False,
+    nome_perfil: str | None = None,
 ) -> None:
     config = _carregar_config(caminho)
     token = "" if seco else _token_telegram()
     store = Store()
+    cache = CachePncp()
 
-    publicacoes = await _fetch_publicacoes(config, dias)
+    t0 = time.monotonic()
+    publicacoes = await _fetch_publicacoes(config, dias, cache)
+    tempo_pncp = time.monotonic() - t0
 
     perfis = config.perfis_resolvidos()
     if nome_perfil:
@@ -166,14 +187,19 @@ async def _rodar(
 
         enviadas = await notify.enviar(token, perfil.telegram.chat_id, mensagens)
         store.marcar_alertados(controles, perfil=perfil.nome, metadados=metadados)
+        store.registrar_metrica(perfil.nome, "alertas_enviados", str(enviadas))
         total_enviadas += enviadas
         print(f"  {enviadas} alerta(s) enviado(s) para o Telegram.")
+
+    cache.limpar_expirados()
 
     if seco:
         print(f"\nDry-run concluido: {total_geral} oportunidade(s) NAO enviada(s).")
     else:
         print(f"\nTotal: {total_geral} oportunidade(s), {total_enviadas} alerta(s) enviados.")
+    print(f"Tempo PNCP: {tempo_pncp:.1f}s | Cache: {cache.total()} entradas")
     store.fechar()
+    cache.fechar()
 
 
 def _testar_regras(caminho: str | None, texto: str) -> None:
@@ -238,29 +264,29 @@ def _gerar_digest(caminho: str | None, nome_perfil: str | None, enviar: bool) ->
             regras[r] = regras.get(r, 0) + 1
 
         linhas = [
-            f"📊 Digest semanal — {perfil.nome}",
-            f"📅 Semana {datetime.now().strftime('%G-W%V')}",
+            f"Digest semanal - {perfil.nome}",
+            f"Semana {datetime.now().strftime('%G-W%V')}",
             "",
-            f"🔍 {total} oportunidade(s) encontrada(s)",
-            f"💰 Valor total estimado: {valor_txt}",
+            f"{total} oportunidade(s) encontrada(s)",
+            f"Valor total estimado: {valor_txt}",
             "",
-            "📋 Por regra:",
+            "Por regra:",
         ]
         for regra, count in sorted(regras.items(), key=lambda x: -x[1]):
-            linhas.append(f"  • {regra}: {count}")
+            linhas.append(f"  - {regra}: {count}")
 
         top = [i for i in itens if i.get("valor")][:5]
         if top:
             linhas.append("")
-            linhas.append("🏆 Top 5 por valor:")
+            linhas.append("Top 5 por valor:")
             for i, item in enumerate(top, 1):
                 val = item.get("valor") or 0
                 val_txt = f"R$ {val:,.0f}".replace(",", ".")
                 obj = (item.get("objeto") or "")[:80]
-                linhas.append(f"  {i}. {val_txt} — {obj}")
+                linhas.append(f"  {i}. {val_txt} - {obj}")
 
         linhas.append("")
-        linhas.append("🔗 https://pncp.gov.br/app/editais")
+        linhas.append("https://pncp.gov.br/app/editais")
 
         digest = "\n".join(linhas)
         print(f"\n{'=' * 50}")
@@ -268,13 +294,24 @@ def _gerar_digest(caminho: str | None, nome_perfil: str | None, enviar: bool) ->
         print(f"{'=' * 50}")
 
         if enviar and token:
-            import asyncio
             asyncio.run(
                 notify.enviar(token, perfil.telegram.chat_id, [digest])
             )
             print("  Digest enviado para o Telegram.")
 
     store.fechar()
+
+
+def _gerar_dashboard(caminho: str | None) -> None:
+    from vigia.dashboard import gerar_dashboard_html
+
+    store = Store()
+    config = _carregar_config(caminho)
+    perfis = [p.nome for p in config.perfis_resolvidos()]
+    caminho_html = gerar_dashboard_html(store, perfis)
+    store.fechar()
+    print(f"Dashboard gerado: {caminho_html}")
+    print(f"Abra no navegador: file://{os.path.abspath(caminho_html)}")
 
 
 def main() -> None:
@@ -323,6 +360,11 @@ def main() -> None:
         help="Envia o digest para o Telegram",
     )
 
+    dashboard_parser = subparsers.add_parser(
+        "dashboard", help="Gera dashboard HTML com historico e metricas"
+    )
+    dashboard_parser.add_argument("--config", help="Caminho do vigia.yaml")
+
     argumentos = parser.parse_args()
 
     if argumentos.comando == "run":
@@ -342,6 +384,8 @@ def main() -> None:
             getattr(argumentos, "perfil", None),
             argumentos.enviar,
         )
+    elif argumentos.comando == "dashboard":
+        _gerar_dashboard(argumentos.config)
 
 
 if __name__ == "__main__":

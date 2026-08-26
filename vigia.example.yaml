@@ -1,64 +1,207 @@
 # ============================================================
-# vigia.yaml -- Exemplo multi-perfil
+# vigia.example.yaml — Exemplo com multiplos nichos
 # ============================================================
-# Cada perfil define: regras, telegram (chat_id), filtros
-# Filtros globais sao herdados por todos os perfis
+# Copie: cp vigia.example.yaml vigia.yaml
+# Edite: vim vigia.yaml
 # ============================================================
 
-# --- Config global (herdada por todos os perfis) ---
-pncp:
-  modalidades: [6]  # Pregao Eletronico (padrao)
-  uf: []
+# --- Modo simples (1 perfil) ---
+# Descomente e edite:
 
-filtros_globais:
-  valor_minimo: 10000  # R$ 10 mil minimo global
+# perfil:
+#   nome: "Climatizacao"
+#   descricao: "Monitor de licitacoes de climatizacao e afins"
+#
+# telegram:
+#   chat_id: "123456789"
+#
+# filtros_globais:
+#   modalidades: [6]
+#   ufs: []
+#   valor_minimo: 5000
+#
+# regras:
+#   - nome: "Climatizacao"
+#     qualquer: ["climatizacao", "ar-condicionado", "hvac", "refrigeracao"]
+#     destaque: ["preventiva", "manutencao"]
 
-llm:
-  base_url: "https://api.groq.com/openai/v1"
-  model: "llama-3.1-8b-instant"
-  api_key_env: "OPENAI_API_KEY"
-
-# --- Perfis ---
-# Cada perfil tem: nome, telegram, regras
-# Filtros: sobrescrevem os globais
+# --- Modo multiperfil (N perfis num so config) ---
+# Ideal para agencias que atendem varias empresas
+# ou empresas com areas de compra diferentes.
 
 perfis:
+  # ── Climatizacao / HVAC ──────────────────────────────────
   - nome: "Climatizacao SP"
     telegram:
-      chat_id: "SEU_CHAT_ID_AQUI"
+      chat_id: "111111"
     filtros_globais:
       ufs: ["SP"]
       valor_minimo: 50000
     regras:
       - nome: "Climatizacao"
-        qualquer: ["climatizacao", "ar-condicionado", "hvac", "bombas de calor"]
-        excluir: ["locacao de imovel"]
-        destaque: ["preventiva", "registro de precos"]
-      - nome: "Refrigeracao Industrial"
-        qualquer: ["refrigeracao", "câmara fria", "freezer industrial"]
+        qualquer:
+          - "climatizacao"
+          - "ar-condicionado"
+          - "ar condicionado"
+          - "hvac"
+          - "refrigeracao"
+          - "refrigeracao"
+          - "bombas de calor"
+          - "chiller"
+          - "ventilacao"
+        excluir:
+          - "locacao de imovel"
+          - "locacao de veiculo"
+        destaque:
+          - "preventiva"
+          - "corretiva"
+          - "registro de precos"
+          - "manutencao"
+          - "instalacao"
 
+  # ── Saude / Farmaceutico ─────────────────────────────────
   - nome: "Medicamentos BA"
     telegram:
-      chat_id: "SEU_OUTRO_CHAT_ID"
+      chat_id: "222222"
     filtros_globais:
       ufs: ["BA"]
       valor_minimo: 100000
+      modalidades: [6, 4]
     regras:
       - nome: "Medicamentos"
-        qualquer: ["medicamento", "farmaceutico", "remedio"]
-        excluir: ["distribuicao", "farmacia popular"]
-        destaque: ["oncologico", "hospitalar", "insumos"]
+        qualquer:
+          - "medicamento"
+          - "farmaceutico"
+          - "remedio"
+          - "generico"
+          - "antibiotico"
+          - "analgesico"
+        destaque:
+          - "saude publica"
+          - "hospital"
 
-  - nome: "TI Generico"
+  # ── TI / Software ────────────────────────────────────────
+  - nome: "TI Infraestrutura"
     telegram:
-      chat_id: "SEU_CHAT_ID_TI"
+      chat_id: "333333"
     filtros_globais:
-      ufs: []
       valor_minimo: 20000
     regras:
-      - nome: "Infraestrutura"
-        qualquer: ["servidor", "data center", "cloud", "storage"]
-        destaque: ["hibrido", "migracao"]
-      - nome: "Desenvolvimento"
-        qualquer: ["desenvolvimento", "software", "sistema"]
-        excluir: ["licenca"]
+      - nome: "Servidores"
+        qualquer:
+          - "servidor"
+          - "data center"
+          - "cloud"
+          - "nuvem"
+          - "storage"
+          - "backup"
+        destaque:
+          - "manutencao"
+          - "suporte tecnico"
+
+      - nome: "Software"
+        qualquer:
+          - "licenca"
+          - "software"
+          - "sistema"
+          - "plataforma"
+          - "desenvolvimento"
+        destaque:
+          - "suporte"
+          - "implantacao"
+
+  # ── Petroquimica / Energia ───────────────────────────────
+  - nome: "Petroquimica"
+    telegram:
+      chat_id: "444444"
+    filtros_globais:
+      valor_minimo: 200000
+    regras:
+      - nome: "Combustiveis e Lubrificantes"
+        qualquer:
+          - "combustivel"
+          - "lubrificante"
+          - "oleo"
+          - "diesel"
+          - "gasolina"
+        destaque:
+          - "abastecimento"
+          - "fornecimento continuo"
+
+      - nome: "Equipamentos Industriais"
+        qualquer:
+          - "tubulacao"
+          - "valvula"
+          - "bomba"
+          - "compressor"
+          - "caldeira"
+          - "tubo"
+        destaque:
+          - "manutencao preventiva"
+          - "inspecao"
+
+  # ── Material de Escritorio ───────────────────────────────
+  - nome: "Escritorio e Mobiliario"
+    telegram:
+      chat_id: "555555"
+    filtros_globais:
+      valor_minimo: 10000
+    regras:
+      - nome: "Papelaria"
+        qualquer:
+          - "papelaria"
+          - "material de escritorio"
+          - "papel"
+          - "caneta"
+          - "grampeador"
+
+      - nome: "Mobiliario"
+        qualquer:
+          - "mobiliario"
+          - "mesa"
+          - "cadeira"
+          - "armario"
+          - "estante"
+        destaque:
+          - "ergonomico"
+          - "funcional"
+
+  # ── Construcao Civil ─────────────────────────────────────
+  - nome: "Obras e Reformas"
+    telegram:
+      chat_id: "666666"
+    filtros_globais:
+      valor_minimo: 500000
+    regras:
+      - nome: "Construcao"
+        qualquer:
+          - "obra"
+          - "reforma"
+          - "pavimentacao"
+          - "construcao"
+          - "demolicao"
+          - "pintura"
+        destaque:
+          - "licitacao aberta"
+          - "pregao eletronico"
+
+  # ── Alimentacao ──────────────────────────────────────────
+  - nome: "Alimentacao e Merenda"
+    telegram:
+      chat_id: "777777"
+    filtros_globais:
+      valor_minimo: 30000
+    regras:
+      - nome: "Generos Alimenticios"
+        qualquer:
+          - "genero alimenticio"
+          - "alimentacao"
+          - "merenda"
+          - "cesta basica"
+          - "arroz"
+          - "feijao"
+          - "oleo"
+        destaque:
+          - "escola"
+          - "hospital"
+          - "instituicao publica"

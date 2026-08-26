@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import date, timedelta
 from typing import Any
 
 import httpx
+
+from vigia.cache import CachePncp
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +19,9 @@ ESPERA_RATE_LIMIT = 45.0
 TENTATIVAS_POR_PAGINA = 4
 
 MODALIDADES_CONHECIDAS = {
-    1: "Leilão Eletrônico",
-    4: "Concorrência Eletrônica",
-    6: "Pregão Eletrônico",
+    1: "Leilao Eletronico",
+    4: "Concorrencia Eletronica",
+    6: "Pregao Eletronico",
 }
 
 
@@ -31,10 +35,20 @@ async def _obter_pagina(
     data_final: date,
     codigo_modalidade: int,
     pagina: int,
+    cache: CachePncp | None = None,
 ) -> dict[str, Any]:
+    di = data_inicial.strftime("%Y%m%d")
+    df = data_final.strftime("%Y%m%d")
+
+    if cache:
+        dados_cache = cache.buscar(di, df, [codigo_modalidade], pagina, TAMANHO_PAGINA)
+        if dados_cache is not None:
+            logger.debug("Cache hit: modalidade %d, página %d", codigo_modalidade, pagina)
+            return dados_cache
+
     params = {
-        "dataInicial": data_inicial.strftime("%Y%m%d"),
-        "dataFinal": data_final.strftime("%Y%m%d"),
+        "dataInicial": di,
+        "dataFinal": df,
         "codigoModalidadeContratacao": str(codigo_modalidade),
         "pagina": str(pagina),
         "tamanhoPagina": str(TAMANHO_PAGINA),
@@ -79,6 +93,8 @@ async def _obter_pagina(
                 dados: dict[str, Any] = resposta.json()
             except ValueError as exc:
                 raise PncpError(f"Resposta não-JSON do PNCP: {exc}") from exc
+            if cache:
+                cache.salvar(di, df, [codigo_modalidade], pagina, TAMANHO_PAGINA, dados)
             return dados
         except httpx.TransportError as exc:
             ultimo_erro = exc
@@ -101,6 +117,7 @@ async def buscar_publicacoes(
     data_inicial: date,
     data_final: date,
     modalidades: list[int],
+    cache: CachePncp | None = None,
 ) -> list[dict[str, Any]]:
     """Busca todas as contratações publicadas no período, por modalidade, paginando."""
     if data_final < data_inicial:
@@ -110,7 +127,7 @@ async def buscar_publicacoes(
         publicacoes: list[dict[str, Any]] = []
         for codigo in modalidades:
             publicacoes.extend(
-                await _buscar_modalidade(client, data_inicial, data_final, codigo)
+                await _buscar_modalidade(client, data_inicial, data_final, codigo, cache)
             )
             await asyncio.sleep(PAUSA_ENTRE_PAGINAS)
         return publicacoes
@@ -121,11 +138,14 @@ async def _buscar_modalidade(
     data_inicial: date,
     data_final: date,
     codigo_modalidade: int,
+    cache: CachePncp | None = None,
 ) -> list[dict[str, Any]]:
     itens: list[dict[str, Any]] = []
     pagina = 1
     while pagina <= MAX_PAGINAS:
-        dados = await _obter_pagina(client, data_inicial, data_final, codigo_modalidade, pagina)
+        dados = await _obter_pagina(
+            client, data_inicial, data_final, codigo_modalidade, pagina, cache
+        )
 
         lote = dados.get("data") or []
         itens.extend(item for item in lote if isinstance(item, dict))
