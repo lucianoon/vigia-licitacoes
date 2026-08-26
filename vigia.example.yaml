@@ -6,7 +6,7 @@
 # ============================================================
 
 # --- Portais consultados ---
-# Opcoes: pncp, petronect, comprasnet
+# Opcoes: pncp, comprasnet
 portais:
   - pncp
 

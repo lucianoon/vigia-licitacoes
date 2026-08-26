@@ -52,11 +52,9 @@ def portais_disponiveis() -> list[str]:
 def _registrar_portais_padrao() -> None:
     """Registra portais built-in."""
     from vigia.comprasnet import ComprasNetPortal
-    from vigia.petronect import PetronectPortal
     from vigia.pncp import PncpPortal
 
     registrar(PncpPortal)
-    registrar(PetronectPortal)
     registrar(ComprasNetPortal)
 
 

@@ -454,7 +454,8 @@ def main() -> None:
         "--perfil", help="Executa apenas um perfil especifico (pelo nome)",
     )
     rodar_parser.add_argument(
-        "--portal", help="Consulta apenas um portal especifico (pncp, petronect, comprasnet)",
+        "--portal",
+        help="Consulta apenas um portal (pncp, comprasnet)",
     )
     rodar_parser.add_argument(
         "--canal", choices=["telegram", "whatsapp", "all"],
