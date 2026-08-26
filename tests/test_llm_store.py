@@ -43,3 +43,38 @@ def test_store_dedup(tmp_path) -> None:
         assert store.total() == 1
     finally:
         store.fechar()
+
+
+def test_store_pode_lembrar_false_recem_alertado(tmp_path) -> None:
+    store = Store(str(tmp_path / "vigia.db"))
+    try:
+        store.marcar_alertados(["X"])
+        assert not store.pode_lembrar("X")
+    finally:
+        store.fechar()
+
+
+def test_store_pode_lembrar_true_apos_24h(tmp_path) -> None:
+    from datetime import datetime, timedelta
+
+    store = Store(str(tmp_path / "vigia.db"))
+    try:
+        store.marcar_alertados(["Y"])
+        # Simular visto_em antigo (25h atras)
+        antigo = (datetime.now() - timedelta(hours=25)).isoformat(timespec="seconds")
+        store._con.execute(
+            "UPDATE vistos SET visto_em = ? WHERE controle = 'Y'",
+            (antigo,),
+        )
+        store._con.commit()
+        assert store.pode_lembrar("Y")
+    finally:
+        store.fechar()
+
+
+def test_store_pode_lembrar_false_nao_visto(tmp_path) -> None:
+    store = Store(str(tmp_path / "vigia.db"))
+    try:
+        assert not store.pode_lembrar("Z")
+    finally:
+        store.fechar()

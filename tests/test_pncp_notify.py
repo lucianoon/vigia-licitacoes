@@ -85,6 +85,45 @@ def test_formatar_alerta_sem_prazo_nao_quebra() -> None:
     assert "ainda não informado" in saida
 
 
+def test_formatar_alerta_urgente() -> None:
+    from datetime import datetime, timedelta
+
+    item = _item()
+    item["dataEncerramentoProposta"] = (
+        datetime.now() + timedelta(hours=36)
+    ).isoformat()
+    saida = notify.formatar_alerta(
+        item, ResultadoRegra("R", ["climatização"], []), None
+    )
+    assert "URGENTE" in saida
+
+
+def test_formatar_alerta_encerrado() -> None:
+    from datetime import datetime, timedelta
+
+    item = _item()
+    item["dataEncerramentoProposta"] = (
+        datetime.now() - timedelta(days=2)
+    ).isoformat()
+    saida = notify.formatar_alerta(
+        item, ResultadoRegra("R", ["climatização"], []), None
+    )
+    assert "Encerrado" in saida
+
+
+def test_formatar_alerta_faltam_dias() -> None:
+    from datetime import datetime, timedelta
+
+    item = _item()
+    item["dataEncerramentoProposta"] = (
+        datetime.now() + timedelta(days=15)
+    ).isoformat()
+    saida = notify.formatar_alerta(
+        item, ResultadoRegra("R", ["climatização"], []), None
+    )
+    assert "faltam 1" in saida and "dias" in saida
+
+
 @respx.mock
 async def test_enviar_telegram_sucesso() -> None:
     rota = respx.post("https://api.telegram.org/botTOKEN/sendMessage").mock(

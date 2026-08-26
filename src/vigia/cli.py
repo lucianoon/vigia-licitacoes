@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import argparse
 import asyncio
 import logging
 import os
 import sys
+from datetime import datetime
 from typing import Any
 
 from vigia import llm, matcher, notify, pncp
@@ -62,6 +65,18 @@ async def _fetch_publicacoes(
     return publicacoes
 
 
+def _dias_restantes(item: dict[str, Any]) -> int:
+    prazo = item.get("dataEncerramentoProposta")
+    if not prazo:
+        return 9999
+    try:
+        momento = datetime.fromisoformat(str(prazo))
+    except ValueError:
+        return 9999
+    restantes = (momento - datetime.now()).days
+    return max(restantes, -1)
+
+
 def _processar_perfil(
     perfil: Perfil,
     publicacoes: list[dict[str, Any]],
@@ -70,6 +85,8 @@ def _processar_perfil(
     token: str,
 ) -> list[tuple[dict[str, Any], ResultadoRegra]]:
     novos: list[tuple[dict[str, Any], ResultadoRegra]] = []
+    lembretes: list[tuple[dict[str, Any], ResultadoRegra]] = []
+
     for item in publicacoes:
         controle = str(item.get("numeroControlePNCP") or "")
         resultados = matcher.avaliar(
@@ -77,10 +94,15 @@ def _processar_perfil(
         )
         if not resultados or not controle:
             continue
+
         if seco or store.nao_vistos([controle], perfil=perfil.nome):
             novos.append((item, resultados[0]))
+        elif _dias_restantes(item) <= 2 and store.pode_lembrar(controle):
+            lembretes.append((item, resultados[0]))
 
-    return novos
+    novos.sort(key=lambda par: _dias_restantes(par[0]))
+    lembretes.sort(key=lambda par: _dias_restantes(par[0]))
+    return novos + lembretes
 
 
 async def _rodar(
@@ -118,14 +140,21 @@ async def _rodar(
 
         mensagens: list[str] = []
         controles: list[str] = []
+        eh_lembrete: list[bool] = []
         for item, resultado in novos:
             resumo = await llm.resumir(item)
             mensagens.append(notify.formatar_alerta(item, resultado, resumo))
             controles.append(str(item.get("numeroControlePNCP")))
+            eh_lembrete.append(_dias_restantes(item) <= 2)
 
         if seco:
-            for indice, mensagem in enumerate(mensagens, start=1):
-                print(f"\n  [Dry-run] Alerta {indice}/{len(mensagens)}:")
+            for indice, (mensagem, lembrete) in enumerate(
+                zip(mensagens, eh_lembrete, strict=True), start=1
+            ):
+                tag = " [LEMBRETE]" if lembrete else ""
+                print(
+                    f"\n  [Dry-run] Alerta {indice}/{len(mensagens)}{tag}:"
+                )
                 print(f"  {mensagem}")
             continue
 

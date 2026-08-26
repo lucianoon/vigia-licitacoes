@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 SCHEMA_VISTOS = """
@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS vistos (
     PRIMARY KEY (controle, perfil)
 )
 """
+
+INTERVALO_LEMBRETE = timedelta(hours=24)
 
 
 class Store:
@@ -42,14 +44,28 @@ class Store:
         encontrados = {linha[0] for linha in linhas}
         return set(controles) - encontrados
 
+    def pode_lembrar(self, controle: str, perfil: str = "__global__") -> bool:
+        linha = self._con.execute(
+            "SELECT visto_em FROM vistos WHERE controle = ? AND perfil = ?",
+            (controle, perfil),
+        ).fetchone()
+        if not linha:
+            return False
+        try:
+            ultimo = datetime.fromisoformat(linha[0])
+        except ValueError:
+            return False
+        return datetime.now() - ultimo >= INTERVALO_LEMBRETE
+
     def marcar_alertados(
         self, controles: list[str], perfil: str = "__global__"
     ) -> None:
         agora = datetime.now().isoformat(timespec="seconds")
         self._con.executemany(
-            "INSERT OR IGNORE INTO vistos (controle, perfil, visto_em, alertado) "
-            "VALUES (?, ?, ?, 1)",
-            [(controle, perfil, agora) for controle in controles],
+            "INSERT INTO vistos (controle, perfil, visto_em, alertado) "
+            "VALUES (?, ?, ?, 1) "
+            "ON CONFLICT(controle, perfil) DO UPDATE SET visto_em = ?, alertado = 1",
+            [(controle, perfil, agora, agora) for controle in controles],
         )
         self._con.commit()
 
