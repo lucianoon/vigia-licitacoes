@@ -141,11 +141,17 @@ async def _rodar(
         mensagens: list[str] = []
         controles: list[str] = []
         eh_lembrete: list[bool] = []
+        metadados: list[dict[str, Any]] = []
         for item, resultado in novos:
             resumo = await llm.resumir(item)
             mensagens.append(notify.formatar_alerta(item, resultado, resumo))
             controles.append(str(item.get("numeroControlePNCP")))
             eh_lembrete.append(_dias_restantes(item) <= 2)
+            metadados.append({
+                "objeto": str(item.get("objetoCompra", ""))[:200],
+                "valor": item.get("valorTotalEstimado"),
+                "regra": resultado.regra,
+            })
 
         if seco:
             for indice, (mensagem, lembrete) in enumerate(
@@ -159,7 +165,7 @@ async def _rodar(
             continue
 
         enviadas = await notify.enviar(token, perfil.telegram.chat_id, mensagens)
-        store.marcar_alertados(controles, perfil=perfil.nome)
+        store.marcar_alertados(controles, perfil=perfil.nome, metadados=metadados)
         total_enviadas += enviadas
         print(f"  {enviadas} alerta(s) enviado(s) para o Telegram.")
 
@@ -195,6 +201,82 @@ def _testar_regras(caminho: str | None, texto: str) -> None:
         print("\nNenhuma regra casou com o texto informado em nenhum perfil.")
 
 
+def _gerar_digest(caminho: str | None, nome_perfil: str | None, enviar: bool) -> None:
+    config = _carregar_config(caminho)
+    store = Store()
+
+    perfis = config.perfis_resolvidos()
+    if nome_perfil:
+        perfis = [p for p in perfis if p.nome == nome_perfil]
+        if not perfis:
+            nomes = ", ".join(p.nome for p in config.perfis_resolvidos())
+            print(
+                f"Erro: perfil '{nome_perfil}' nao encontrado. "
+                f"Disponiveis: {nomes}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+    token = _token_telegram() if enviar else ""
+
+    for perfil in perfis:
+        itens: list[dict[str, Any]] = store.resumo_semanal(perfil=perfil.nome)
+        if not itens:
+            print(f"\n--- {perfil.nome}: nada esta semana ---")
+            continue
+
+        total = len(itens)
+        valor_total = sum(i.get("valor") or 0 for i in itens)
+        valor_txt = (
+            f"R$ {valor_total:,.0f}".replace(",", ".")
+            if valor_total
+            else "valor nao informado"
+        )
+        regras: dict[str, int] = {}
+        for item_semanal in itens:
+            r = item_semanal.get("regra", "?")
+            regras[r] = regras.get(r, 0) + 1
+
+        linhas = [
+            f"📊 Digest semanal — {perfil.nome}",
+            f"📅 Semana {datetime.now().strftime('%G-W%V')}",
+            "",
+            f"🔍 {total} oportunidade(s) encontrada(s)",
+            f"💰 Valor total estimado: {valor_txt}",
+            "",
+            "📋 Por regra:",
+        ]
+        for regra, count in sorted(regras.items(), key=lambda x: -x[1]):
+            linhas.append(f"  • {regra}: {count}")
+
+        top = [i for i in itens if i.get("valor")][:5]
+        if top:
+            linhas.append("")
+            linhas.append("🏆 Top 5 por valor:")
+            for i, item in enumerate(top, 1):
+                val = item.get("valor") or 0
+                val_txt = f"R$ {val:,.0f}".replace(",", ".")
+                obj = (item.get("objeto") or "")[:80]
+                linhas.append(f"  {i}. {val_txt} — {obj}")
+
+        linhas.append("")
+        linhas.append("🔗 https://pncp.gov.br/app/editais")
+
+        digest = "\n".join(linhas)
+        print(f"\n{'=' * 50}")
+        print(digest)
+        print(f"{'=' * 50}")
+
+        if enviar and token:
+            import asyncio
+            asyncio.run(
+                notify.enviar(token, perfil.telegram.chat_id, [digest])
+            )
+            print("  Digest enviado para o Telegram.")
+
+    store.fechar()
+
+
 def main() -> None:
     _configurar_logging()
     parser = argparse.ArgumentParser(
@@ -228,6 +310,19 @@ def main() -> None:
     testar_parser.add_argument("texto")
     testar_parser.add_argument("--config", help="Caminho do vigia.yaml")
 
+    digest_parser = subparsers.add_parser(
+        "digest", help="Gera o digest semanal de licitacoes"
+    )
+    digest_parser.add_argument("--config", help="Caminho do vigia.yaml")
+    digest_parser.add_argument(
+        "--perfil", help="Gera digest apenas para um perfil especifico"
+    )
+    digest_parser.add_argument(
+        "--enviar",
+        action="store_true",
+        help="Envia o digest para o Telegram",
+    )
+
     argumentos = parser.parse_args()
 
     if argumentos.comando == "run":
@@ -241,6 +336,12 @@ def main() -> None:
         )
     elif argumentos.comando == "test-regras":
         _testar_regras(argumentos.config, argumentos.texto)
+    elif argumentos.comando == "digest":
+        _gerar_digest(
+            argumentos.config,
+            getattr(argumentos, "perfil", None),
+            argumentos.enviar,
+        )
 
 
 if __name__ == "__main__":

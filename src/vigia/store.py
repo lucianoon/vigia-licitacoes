@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 SCHEMA_VISTOS = """
 CREATE TABLE IF NOT EXISTS vistos (
@@ -8,6 +11,10 @@ CREATE TABLE IF NOT EXISTS vistos (
     perfil TEXT NOT NULL DEFAULT '__global__',
     visto_em TEXT NOT NULL,
     alertado INTEGER NOT NULL DEFAULT 0,
+    semana TEXT NOT NULL DEFAULT '',
+    objeto TEXT NOT NULL DEFAULT '',
+    valor REAL,
+    regra TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (controle, perfil)
 )
 """
@@ -24,9 +31,9 @@ class Store:
     def _conectar(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.caminho)
         con.execute(SCHEMA_VISTOS)
-        # Migracao: schema antigo (PK so em controle) → novo (controle+perfil)
+        # Migracao: schema antigo → novo (colunas adicionais)
         try:
-            con.execute("SELECT perfil FROM vistos LIMIT 1")
+            con.execute("SELECT semana FROM vistos LIMIT 1")
         except sqlite3.OperationalError:
             con.execute("DROP TABLE IF EXISTS vistos")
             con.execute(SCHEMA_VISTOS)
@@ -58,16 +65,59 @@ class Store:
         return datetime.now() - ultimo >= INTERVALO_LEMBRETE
 
     def marcar_alertados(
-        self, controles: list[str], perfil: str = "__global__"
+        self,
+        controles: list[str],
+        perfil: str = "__global__",
+        metadados: list[dict[str, Any]] | None = None,
     ) -> None:
         agora = datetime.now().isoformat(timespec="seconds")
+        semana = datetime.now().strftime("%G-W%V")
+        linhas = []
+        for i, controle in enumerate(controles):
+            meta = (metadados[i] if metadados and i < len(metadados) else {}) or {}
+            linhas.append((
+                controle,
+                perfil,
+                agora,
+                semana,
+                meta.get("objeto", ""),
+                meta.get("valor"),
+                meta.get("regra", ""),
+            ))
         self._con.executemany(
-            "INSERT INTO vistos (controle, perfil, visto_em, alertado) "
-            "VALUES (?, ?, ?, 1) "
-            "ON CONFLICT(controle, perfil) DO UPDATE SET visto_em = ?, alertado = 1",
-            [(controle, perfil, agora, agora) for controle in controles],
+            "INSERT INTO vistos "
+            "(controle, perfil, visto_em, alertado, semana, objeto, valor, regra) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?) "
+            "ON CONFLICT(controle, perfil) DO UPDATE SET "
+            "visto_em = ?, alertado = 1, semana = ?, objeto = ?, valor = ?, regra = ?",
+            [
+                (*row, row[2], row[3], row[4], row[5], row[6])
+                for row in linhas
+            ],
         )
         self._con.commit()
+
+    def resumo_semanal(self, perfil: str | None = None) -> list[dict[str, Any]]:
+        semana = datetime.now().strftime("%G-W%V")
+        if perfil:
+            linhas = self._con.execute(
+                "SELECT controle, objeto, valor, regra FROM vistos "
+                "WHERE perfil = ? AND semana = ? AND alertado = 1 "
+                "ORDER BY COALESCE(valor, 0) DESC",
+                (perfil, semana),
+            ).fetchall()
+        else:
+            linhas = self._con.execute(
+                "SELECT controle, objeto, valor, regra, perfil FROM vistos "
+                "WHERE semana = ? AND alertado = 1 "
+                "ORDER BY COALESCE(valor, 0) DESC",
+                (semana,),
+            ).fetchall()
+        return [
+            {"controle": row[0], "objeto": row[1], "valor": row[2], "regra": row[3],
+             **({"perfil": row[4]} if len(row) > 4 else {})}
+            for row in linhas
+        ]
 
     def total(self, perfil: str | None = None) -> int:
         if perfil:
