@@ -1,9 +1,14 @@
 # ============================================================
-# vigia.example.yaml — Exemplo com multiplos nichos
+# vigia.example.yaml — Exemplo completo multi-nicho + multi-portal
 # ============================================================
 # Copie: cp vigia.example.yaml vigia.yaml
 # Edite: vim vigia.yaml
 # ============================================================
+
+# --- Portais consultados ---
+# Opcoes: pncp, petronect, comprasnet
+portais:
+  - pncp
 
 # --- Modo simples (1 perfil) ---
 # Descomente e edite:
@@ -15,6 +20,10 @@
 # telegram:
 #   chat_id: "123456789"
 #
+# whatsapp:
+#   chat_id: "5511999999999"
+#   api_url: "http://localhost:8080"
+#
 # filtros_globais:
 #   modalidades: [6]
 #   ufs: []
@@ -22,7 +31,7 @@
 #
 # regras:
 #   - nome: "Climatizacao"
-#     qualquer: ["climatizacao", "ar-condicionado", "hvac", "refrigeracao"]
+#     qualquer: ["climatizacao", "ar-condicionado", "hvac"]
 #     destaque: ["preventiva", "manutencao"]
 
 # --- Modo multiperfil (N perfis num so config) ---
@@ -34,6 +43,9 @@ perfis:
   - nome: "Climatizacao SP"
     telegram:
       chat_id: "111111"
+    whatsapp:
+      chat_id: "5511911111111"
+      api_url: "http://localhost:8080"
     filtros_globais:
       ufs: ["SP"]
       valor_minimo: 50000
@@ -44,7 +56,6 @@ perfis:
           - "ar-condicionado"
           - "ar condicionado"
           - "hvac"
-          - "refrigeracao"
           - "refrigeracao"
           - "bombas de calor"
           - "chiller"
