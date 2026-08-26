@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 from datetime import datetime
 from typing import Any
@@ -27,6 +28,13 @@ def _gerar_html(
 ) -> str:
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
+    # Extract unique values for filters
+    perfis_unicos = sorted({item.get("perfil", "") for item in historico if item.get("perfil")})
+    portais_unicos = sorted({item.get("portal", "") for item in historico if item.get("portal")})
+    datas = [item.get("visto_em", "")[:10] for item in historico if item.get("visto_em")]
+    data_min = min(datas) if datas else ""
+    data_max = max(datas) if datas else ""
+
     # Metricas por perfil
     linhas_perfil = ""
     for perfil, metricas_p in metricas_por_perfil.items():
@@ -37,22 +45,8 @@ def _gerar_html(
           <td>{enviados}</td>
         </tr>"""
 
-    # Historico recente
-    linhas_historico = ""
-    for item in historico[:50]:
-        valor = _fmt_valor(item.get("valor"))
-        objeto = _esc((item.get("objeto") or "")[:100])
-        regra = _esc(item.get("regra", ""))
-        visto = _esc(item.get("visto_em", ""))
-        perfil_item = _esc(item.get("perfil", ""))
-        linhas_historico += f"""
-        <tr>
-          <td>{visto}</td>
-          <td>{perfil_item}</td>
-          <td title="{_esc(item.get('objeto', ''))}">{objeto}</td>
-          <td>{regra}</td>
-          <td class="valor">{valor}</td>
-        </tr>"""
+    # Historico rows as JSON for filtering
+    historico_json = json.dumps(historico[:200], ensure_ascii=False, default=str)
 
     # Metricas gerais
     linhas_metricas = ""
@@ -63,7 +57,7 @@ def _gerar_html(
           <td>{count}</td>
         </tr>"""
 
-    # Grafico de atividade semanal (baseado no historico)
+    # Grafico de atividade semanal
     semanas: dict[str, int] = {}
     for item in historico:
         s = item.get("semana", "")
@@ -81,6 +75,14 @@ def _gerar_html(
           <div class="barra-label">{semana[-5:]}</div>
           <div class="barra-valor">{count}</div>
         </div>"""
+
+    # Build filter options HTML
+    perfil_options = "".join(
+        f'<option value="{_esc(p)}">{_esc(p)}</option>' for p in perfis_unicos
+    )
+    portal_options = "".join(
+        f'<option value="{_esc(p)}">{_esc(p)}</option>' for p in portais_unicos
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -103,7 +105,7 @@ def _gerar_html(
   table {{ width: 100%; border-collapse: collapse; margin-top: 16px; }}
   th {{ text-align: left; padding: 8px 12px; background: #1e293b; color: #94a3b8;
         font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em;
-        border-bottom: 1px solid #334155; }}
+        border-bottom: 1px solid #334155; position: sticky; top: 0; }}
   td {{ padding: 8px 12px; border-bottom: 1px solid #1e293b; font-size: 0.85rem; }}
   tr:hover td {{ background: #1e293b; }}
   .valor {{ font-family: 'SF Mono', monospace; text-align: right; white-space: nowrap; }}
@@ -118,6 +120,17 @@ def _gerar_html(
   .barra-valor {{ font-size: 0.7rem; color: #38bdf8; font-weight: 600; }}
   .section {{ margin-bottom: 24px; }}
   .section h2 {{ font-size: 1.1rem; margin-bottom: 12px; color: #e2e8f0; }}
+  .filters {{ display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }}
+  .filters label {{ color: #94a3b8; font-size: 0.8rem; }}
+  .filters select, .filters input {{ background: #0f172a; color: #e2e8f0;
+    border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font-size: 0.85rem; }}
+  .filters select:focus, .filters input:focus {{ outline: none; border-color: #38bdf8; }}
+  .filters button {{ background: #38bdf8; color: #0f172a; border: none;
+    border-radius: 6px; padding: 6px 14px; font-size: 0.85rem; cursor: pointer;
+    font-weight: 600; }}
+  .filters button:hover {{ background: #0ea5e9; }}
+  .count-badge {{ background: #334155; color: #94a3b8; padding: 2px 8px;
+    border-radius: 10px; font-size: 0.75rem; margin-left: 8px; }}
 </style>
 </head>
 <body>
@@ -157,12 +170,35 @@ def _gerar_html(
   </div>
 
   <div class="section">
-    <h2>Top 10 por valor estimado</h2>
+    <h2>Historico <span class="count-badge" id="count-badge">0</span></h2>
     <div class="card">
-      <table>
-        <thead><tr><th>Data</th><th>Perfil</th><th>Objeto</th><th>Regra</th><th>Valor</th></tr></thead>
-        <tbody>{linhas_historico or '<tr><td colspan="5">Nenhum item ainda</td></tr>'}</tbody>
-      </table>
+      <div class="filters">
+        <div>
+          <label>Perfil</label><br>
+          <select id="filter-perfil"><option value="">Todos</option>{perfil_options}</select>
+        </div>
+        <div>
+          <label>Portal</label><br>
+          <select id="filter-portal"><option value="">Todos</option>{portal_options}</select>
+        </div>
+        <div>
+          <label>De</label><br>
+          <input type="date" id="filter-desde" value="{data_min}">
+        </div>
+        <div>
+          <label>Ate</label><br>
+          <input type="date" id="filter-ate" value="{data_max}">
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button onclick="aplicarFiltros()">Filtrar</button>
+        </div>
+      </div>
+      <div style="max-height: 500px; overflow-y: auto;">
+        <table>
+          <thead><tr><th>Data</th><th>Perfil</th><th>Portal</th><th>Objeto</th><th>Regra</th><th>Valor</th></tr></thead>
+          <tbody id="tbody-historico"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -176,15 +212,52 @@ def _gerar_html(
     </div>
   </div>
 
-  <div class="section">
-    <h2>Historico recente (ultimos 50)</h2>
-    <div class="card">
-      <table>
-        <thead><tr><th>Data</th><th>Perfil</th><th>Portal</th><th>Objeto</th><th>Regra</th><th>Valor</th></tr></thead>
-        <tbody>{linhas_historico or '<tr><td colspan="6">Nenhum item ainda</td></tr>'}</tbody>
-      </table>
-    </div>
-  </div>
+<script>
+const HISTORICO = {historico_json};
+
+function fmtValor(v) {{
+  if (v == null || v === 0) return '-';
+  return 'R$ ' + v.toLocaleString('pt-BR');
+}}
+
+function aplicarFiltros() {{
+  const perfil = document.getElementById('filter-perfil').value;
+  const portal = document.getElementById('filter-portal').value;
+  const desde = document.getElementById('filter-desde').value;
+  const ate = document.getElementById('filter-ate').value;
+
+  let filtrado = HISTORICO;
+  if (perfil) filtrado = filtrado.filter(h => h.perfil === perfil);
+  if (portal) filtrado = filtrado.filter(h => h.portal === portal);
+  if (desde) filtrado = filtrado.filter(h => (h.visto_em || '').slice(0, 10) >= desde);
+  if (ate) filtrado = filtrado.filter(h => (h.visto_em || '').slice(0, 10) <= ate);
+
+  const tbody = document.getElementById('tbody-historico');
+  document.getElementById('count-badge').textContent = filtrado.length;
+
+  if (filtrado.length === 0) {{
+    tbody.innerHTML = '<tr><td colspan="6">Nenhum item encontrado</td></tr>';
+    return;
+  }}
+
+  tbody.innerHTML = filtrado.map(h => `
+    <tr>
+      <td>${{(h.visto_em || '').slice(0, 16)}}</td>
+      <td>${{h.perfil || ''}}</td>
+      <td>${{h.portal || ''}}</td>
+      <td title="${{(h.objeto || '').replace(/"/g, '&quot;')}}">
+        ${{(h.objeto || '').slice(0, 80)}}
+      </td>
+      <td>${{h.regra || ''}}</td>
+      <td class="valor">${{fmtValor(h.valor)}}</td>
+    </tr>
+  `).join('');
+}}
+
+document.addEventListener('DOMContentLoaded', () => {{
+  aplicarFiltros();
+}});
+</script>
 </body>
 </html>"""
 
