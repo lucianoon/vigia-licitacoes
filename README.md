@@ -1,18 +1,18 @@
 # vigia-licitacoes
 
-Monitor inteligente de licitações do **PNCP** (Portal Nacional de Contratações Públicas).
-Você cadastra o que sua empresa vende em regras YAML; o Vigia varre as novas contratações,
-filtra, resume cada edital compatível e avisa no **Telegram** antes do prazo fechar.
+Monitor inteligente de licitacoes do **PNCP** (Portal Nacional de Contratacoes Publicas).
+Voce cadastra o que sua empresa vende em regras YAML; o Vigia varre as novas contratacoes,
+filtra, resume cada edital compativel e avisa no **Telegram** antes do prazo fechar.
 
 ## Como funciona
 
 ```
-PNCP (API aberta) → filtros globais → suas regras YAML
-       → resumo por LLM (opcional) → alerta no Telegram
-       → dedup em SQLite (nunca repete aviso)
+PNCP (API aberta) -> filtros globais -> suas regras YAML
+       -> resumo por LLM (opcional) -> alerta no Telegram
+       -> dedup em SQLite (nunca repete aviso)
 ```
 
-## Instalação
+## Instalacao
 
 ```bash
 git clone https://github.com/lucianoon/vigia-licitacoes
@@ -20,7 +20,7 @@ cd vigia-licitacoes
 uv sync
 ```
 
-## Configuração (5 minutos)
+## Configuracao (5 minutos)
 
 1. Crie um bot com [@BotFather](https://t.me/BotFather) no Telegram e copie o token
 2. Descubra seu `chat_id` conversando com [@userinfobot](https://t.me/userinfobot)
@@ -31,8 +31,8 @@ cp vigia.example.yaml vigia.yaml   # ajuste regras e chat_id
 export TELEGRAM_TOKEN="123456:ABC..."
 ```
 
-Opcional (resumo por IA): `export OPENAI_API_KEY=...` — aceita qualquer endpoint
-compatível via `OPENAI_BASE_URL` e `VIGIA_MODELO`.
+Opcional (resumo por IA): `export OPENAI_API_KEY=...` -- aceita qualquer endpoint
+compativel via `OPENAI_BASE_URL` e `VIGIA_MODELO`.
 
 ## Uso
 
@@ -41,22 +41,61 @@ compatível via `OPENAI_BASE_URL` e `VIGIA_MODELO`.
 uv run vigia run
 
 # Teste as regras contra um texto de objeto, sem esperar o poll
-uv run vigia test-regras "manutenção preventiva de ar-condicionado split"
+uv run vigia test-regras "manutencao preventiva de ar-condicionado split"
+
+# Modo dry-run (mostra alertas sem enviar)
+uv run vigia run --dry-run
+
+# Rodar apenas um perfil especifico
+uv run vigia run --perfil "Climatizacao SP"
 ```
 
 Exemplo de alerta:
 
 ```
-🎯 PE 138/2026 · R$ 60.000 · Pregão Eletrônico
-🏛️ 7º BBM — Itajaí/SC
-✅ Regra: Climatização (casou: "bombas de calor")
-⏰ Propostas até 04/09 14:00 — faltam 9 dias
+🎯 PE 138/2026 · R$ 60.000 · Pregao Eletronico
+🏛️ 7º BBM — Itajai/SC
+✅ Regra: Climatizacao (casou: "bombas de calor")
+⏰ Propostas ate 04/09 14:00 — faltam 9 dias
 
-🤖 Manutenção preventiva/corretiva de sistemas de climatização
-com fornecimento de peças, sob registro de preços.
+🤖 Manutencao preventiva/corretiva de sistemas de climatizacao
+com fornecimento de pecas, sob registro de precos.
 
 🔗 https://pncp.gov.br/app/editais/...
 ```
+
+## Multi-perfil
+
+O Vigia suporta multiplos perfis num so arquivo de configuracao. Cada perfil tem
+suas regras, filtros e chat_id do Telegram. Util para agencias que atendem varias
+empresas, ou para uma empresa com areas de compra diferentes.
+
+```yaml
+perfis:
+  - nome: "Climatizacao SP"
+    telegram:
+      chat_id: "111"
+    filtros_globais:
+      ufs: ["SP"]
+      valor_minimo: 50000
+    regras:
+      - nome: "Climatizacao"
+        qualquer: ["climatizacao", "ar-condicionado"]
+        destaque: ["preventiva"]
+
+  - nome: "Medicamentos BA"
+    telegram:
+      chat_id: "222"
+    regras:
+      - nome: "Medicamentos"
+        qualquer: ["medicamento"]
+```
+
+**Heranca**: filtros do root sao herdados por todos os perfis. Cada perfil pode
+sobrescrever apenas os campos que quiser (merge profundo).
+
+**Backward compat**: config antigo (root `telegram` + `regras`) continua funcionando
+-- vira automaticamente "Perfil Padrao".
 
 Cron sugerido:
 
@@ -68,7 +107,7 @@ Cron sugerido:
 
 ```bash
 uv sync --dev
-uv run pytest        # suíte completa (mocks)
+uv run pytest        # suite completa (30 testes)
 uv run ruff check .
 uv run mypy src
 ```
@@ -77,12 +116,12 @@ Logs detalhados: `VIGIA_LOG_LEVEL=DEBUG`.
 
 ## Roadmap
 
-- [x] v0.1 — poll PNCP, regras YAML, Telegram, dedup SQLite, LLM opcional
+- [x] v0.1 -- poll PNCP, regras YAML, Telegram, dedup SQLite, LLM opcional
+- [x] Multi-perfil (varios perfis num so config, heranca de filtros)
 - [ ] Digest semanal consolidado
-- [ ] Urgência <48h destacada + lembrete de reenvio
-- [ ] Multi-perfil (agências com vários clientes)
-- [ ] Versão MCP server do PNCP
+- [ ] Urgencia <48h destacada + lembrete de reenvio
+- [ ] Versao MCP server do PNCP
 
-## Licença
+## Licenca
 
 MIT
