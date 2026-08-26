@@ -18,6 +18,7 @@ def _configurar_logging() -> None:
         stream=sys.stderr,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def _token_telegram() -> str:
@@ -40,9 +41,9 @@ def _carregar_config(caminho: str | None) -> Config:
         sys.exit(2)
 
 
-async def _rodar(caminho: str | None, dias: int) -> None:
+async def _rodar(caminho: str | None, dias: int, seco: bool = False) -> None:
     config = _carregar_config(caminho)
-    token = _token_telegram()
+    token = "" if seco else _token_telegram()
     store = Store()
 
     inicio, fim = pncp.janela_padrao(dias=dias)
@@ -62,7 +63,7 @@ async def _rodar(caminho: str | None, dias: int) -> None:
         resultados = matcher.avaliar(item, config.filtros_globais, config.regras)
         if not resultados or not controle:
             continue
-        if store.nao_vistos([controle]):
+        if seco or store.nao_vistos([controle]):
             melhores = resultados[0]
             novos.append((item, melhores))
 
@@ -77,6 +78,13 @@ async def _rodar(caminho: str | None, dias: int) -> None:
         resumo = await llm.resumir(item)
         mensagens.append(notify.formatar_alerta(item, resultado, resumo))
         controles.append(str(item.get("numeroControlePNCP")))
+
+    if seco:
+        for indice, mensagem in enumerate(mensagens, start=1):
+            print(f"\n{'=' * 50}\nALERTA {indice}/{len(mensagens)} (modo dry-run)\n{'=' * 50}")
+            print(mensagem)
+        print(f"\nDry-run concluído: {len(mensagens)} alerta(s) NÃO enviado(s).")
+        return
 
     enviadas = await notify.enviar(token, config.telegram.chat_id, mensagens)
     store.marcar_alertados(controles)
@@ -112,6 +120,11 @@ def main() -> None:
     rodar_parser.add_argument(
         "--dias", type=int, default=2, help="Janela de dias do PNCP (padrão 2)"
     )
+    rodar_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Mostra os alertas sem enviar nem marcar como vistos",
+    )
 
     testar_parser = subparsers.add_parser(
         "test-regras", help="Testa as regras contra um texto de objeto"
@@ -122,7 +135,7 @@ def main() -> None:
     argumentos = parser.parse_args()
 
     if argumentos.comando == "run":
-        asyncio.run(_rodar(argumentos.config, argumentos.dias))
+        asyncio.run(_rodar(argumentos.config, argumentos.dias, argumentos.dry_run))
     elif argumentos.comando == "test-regras":
         _testar_regras(argumentos.config, argumentos.texto)
 
