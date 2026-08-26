@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -34,8 +35,8 @@ INTERVALO_LEMBRETE = timedelta(hours=24)
 
 
 class Store:
-    def __init__(self, caminho: str = "vigia.db") -> None:
-        self.caminho = Path(caminho)
+    def __init__(self, caminho: str | None = None) -> None:
+        self.caminho = Path(caminho or os.environ.get("VIGIA_DB_PATH", "vigia.db"))
         self.caminho.parent.mkdir(parents=True, exist_ok=True)
         self._con = self._conectar()
 
@@ -43,13 +44,42 @@ class Store:
         con = sqlite3.connect(self.caminho)
         con.execute(SCHEMA_VISTOS)
         con.execute(SCHEMA_METRICAS)
-        try:
-            con.execute("SELECT semana FROM vistos LIMIT 1")
-        except sqlite3.OperationalError:
-            con.execute("DROP TABLE IF EXISTS vistos")
-            con.execute(SCHEMA_VISTOS)
+        self._migrar_vistos(con)
         con.commit()
         return con
+
+    @staticmethod
+    def _migrar_vistos(con: sqlite3.Connection) -> None:
+        """Atualiza schemas antigos preservando o histórico existente."""
+        info = con.execute("PRAGMA table_info(vistos)").fetchall()
+        colunas = {str(linha[1]) for linha in info}
+        pk = [str(linha[1]) for linha in sorted(info, key=lambda linha: linha[5]) if linha[5]]
+        esperadas = {
+            "controle", "perfil", "visto_em", "alertado", "semana",
+            "objeto", "valor", "regra", "portal",
+        }
+        if esperadas.issubset(colunas) and pk == ["controle", "perfil"]:
+            return
+
+        expressoes = {
+            "controle": "controle",
+            "perfil": "COALESCE(perfil, '__global__')" if "perfil" in colunas else "'__global__'",
+            "visto_em": "visto_em" if "visto_em" in colunas else "datetime('now')",
+            "alertado": "alertado" if "alertado" in colunas else "1",
+            "semana": "semana" if "semana" in colunas else "''",
+            "objeto": "objeto" if "objeto" in colunas else "''",
+            "valor": "valor" if "valor" in colunas else "NULL",
+            "regra": "regra" if "regra" in colunas else "''",
+            "portal": "portal" if "portal" in colunas else "''",
+        }
+        destino = list(expressoes)
+        con.execute("ALTER TABLE vistos RENAME TO vistos_legacy")
+        con.execute(SCHEMA_VISTOS)
+        con.execute(
+            f"INSERT OR REPLACE INTO vistos ({', '.join(destino)}) "
+            f"SELECT {', '.join(expressoes[c] for c in destino)} FROM vistos_legacy"
+        )
+        con.execute("DROP TABLE vistos_legacy")
 
     def nao_vistos(
         self, controles: list[str], perfil: str = "__global__"
@@ -121,15 +151,20 @@ class Store:
         self, perfil: str | None = None, dias: int = 30
     ) -> dict[str, Any]:
         desde = (datetime.now() - timedelta(days=dias)).isoformat(timespec="seconds")
+        quantidade = (
+            "SUM(CASE WHEN evento = 'alertas_enviados' "
+            "THEN CAST(detalhe AS INTEGER) ELSE 1 END)"
+        )
         if perfil:
             linhas = self._con.execute(
-                "SELECT evento, COUNT(*) FROM metricas "
+                f"SELECT evento, {quantidade} FROM metricas "
                 "WHERE perfil = ? AND criado_em >= ? GROUP BY evento",
                 (perfil, desde),
             ).fetchall()
         else:
             linhas = self._con.execute(
-                "SELECT evento, COUNT(*) FROM metricas WHERE criado_em >= ? GROUP BY evento",
+                f"SELECT evento, {quantidade} FROM metricas "
+                "WHERE criado_em >= ? GROUP BY evento",
                 (desde,),
             ).fetchall()
         return {row[0]: row[1] for row in linhas}
@@ -137,7 +172,9 @@ class Store:
     def metricas_por_perfil(self, dias: int = 30) -> dict[str, dict[str, int]]:
         desde = (datetime.now() - timedelta(days=dias)).isoformat(timespec="seconds")
         linhas = self._con.execute(
-            "SELECT perfil, evento, COUNT(*) FROM metricas "
+            "SELECT perfil, evento, "
+            "SUM(CASE WHEN evento = 'alertas_enviados' "
+            "THEN CAST(detalhe AS INTEGER) ELSE 1 END) FROM metricas "
             "WHERE criado_em >= ? GROUP BY perfil, evento",
             (desde,),
         ).fetchall()
@@ -171,8 +208,8 @@ class Store:
                 "objeto": row[3],
                 "valor": row[4],
                 "regra": row[5],
-                "portal": row[6] if len(row) > 6 else "",
-                **({"perfil": row[7]} if len(row) > 7 else {}),
+                "portal": row[7] if len(row) > 7 else row[6] if len(row) > 6 else "",
+                **({"perfil": row[6]} if len(row) > 7 else {}),
             }
             for row in linhas
         ]

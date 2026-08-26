@@ -6,7 +6,7 @@
 # ============================================================
 
 # --- Portais consultados ---
-# Opcoes: pncp, comprasnet
+# Opcoes: pncp ou comprasnet (ambos usam a base PNCP; escolha apenas um)
 portais:
   - pncp
 

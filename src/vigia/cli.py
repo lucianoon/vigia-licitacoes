@@ -111,10 +111,27 @@ def _backup_automatico(store: Store) -> str | None:
 
     try:
         agora = datetime.now().strftime("%Y-%m-%d_%H%M")
-        backup_dir = os.path.join(os.getcwd(), "backups")
+        backup_dir = os.environ.get(
+            "VIGIA_BACKUP_DIR", os.path.join(os.getcwd(), "backups")
+        )
         os.makedirs(backup_dir, exist_ok=True)
         caminho = os.path.join(backup_dir, f"backup_{agora}.csv")
-        return exportar_csv(store, caminho_saida=caminho)
+        resultado = exportar_csv(store, caminho_saida=caminho)
+        manter = max(int(os.environ.get("VIGIA_BACKUP_KEEP", "30")), 1)
+        antigos = sorted(
+            (
+                entrada
+                for entrada in os.scandir(backup_dir)
+                if entrada.is_file()
+                and entrada.name.startswith("backup_")
+                and entrada.name.endswith(".csv")
+            ),
+            key=lambda entrada: entrada.name,
+            reverse=True,
+        )
+        for entrada in antigos[manter:]:
+            os.unlink(entrada.path)
+        return resultado
     except Exception as exc:
         logger.warning("Backup falhou: %r", exc)
         return None
@@ -152,7 +169,16 @@ async def _buscar_portais(
                 f"continuando com outros portais."
             )
 
-    return todas
+    # Alguns agregadores republicam registros do PNCP com o mesmo controle.
+    # Mantemos apenas a primeira ocorrência para não gerar alertas duplicados.
+    unicas: dict[str, Publicacao] = {}
+    sem_controle: list[Publicacao] = []
+    for publicacao in todas:
+        if publicacao.controle:
+            unicas.setdefault(publicacao.controle, publicacao)
+        else:
+            sem_controle.append(publicacao)
+    return [*unicas.values(), *sem_controle]
 
 
 def _dias_restantes(item: dict[str, Any] | Publicacao) -> int:
@@ -166,7 +192,8 @@ def _dias_restantes(item: dict[str, Any] | Publicacao) -> int:
         momento = datetime.fromisoformat(str(prazo))
     except ValueError:
         return 9999
-    restantes = (momento - datetime.now()).days
+    agora = datetime.now(momento.tzinfo) if momento.tzinfo else datetime.now()
+    restantes = (momento - agora).days
     return max(restantes, -1)
 
 
@@ -191,9 +218,9 @@ def _processar_perfil(
     publicacoes: list[Publicacao],
     store: Store,
     seco: bool,
-) -> list[tuple[Publicacao, ResultadoRegra]]:
-    novos: list[tuple[Publicacao, ResultadoRegra]] = []
-    lembretes: list[tuple[Publicacao, ResultadoRegra]] = []
+) -> list[tuple[Publicacao, ResultadoRegra, bool]]:
+    novos: list[tuple[Publicacao, ResultadoRegra, bool]] = []
+    lembretes: list[tuple[Publicacao, ResultadoRegra, bool]] = []
 
     for item in publicacoes:
         item_dict = _para_dict(item)
@@ -204,9 +231,11 @@ def _processar_perfil(
             continue
 
         if seco or store.nao_vistos([item.controle], perfil=perfil.nome):
-            novos.append((item, resultados[0]))
-        elif _dias_restantes(item) <= 2 and store.pode_lembrar(item.controle):
-            lembretes.append((item, resultados[0]))
+            novos.append((item, resultados[0], False))
+        elif _dias_restantes(item) <= 2 and store.pode_lembrar(
+            item.controle, perfil=perfil.nome
+        ):
+            lembretes.append((item, resultados[0], True))
 
     novos.sort(key=lambda par: _dias_restantes(par[0]))
     lembretes.sort(key=lambda par: _dias_restantes(par[0]))
@@ -219,46 +248,43 @@ async def _enviar_notificacoes(
     controles: list[str],
     token: str,
     canal: str | None = None,
-) -> int:
-    """Envia notificações via Telegram e/ou WhatsApp com fallback."""
-    enviadas = 0
+) -> set[str]:
+    """Envia cada alerta e retorna os controles entregues em ao menos um canal."""
+    entregues: set[str] = set()
+    usar_whatsapp = canal in (None, "all", "whatsapp")
+    usar_telegram = canal in (None, "all", "telegram")
+    token_wa = os.environ.get("WHATSAPP_API_TOKEN", "")
+    api_url = perfil.whatsapp.api_url or os.environ.get("WHATSAPP_API_URL", "")
 
-    # WhatsApp
-    whatsapp_ok = False
-    if canal in (None, "whatsapp") and perfil.whatsapp.chat_id:
-        try:
-            from vigia import whatsapp
+    for mensagem, controle in zip(mensagens, controles, strict=True):
+        entregue = False
+        if usar_whatsapp and perfil.whatsapp.chat_id and token_wa and api_url:
+            try:
+                from vigia import whatsapp
 
-            token_wa = os.environ.get("WHATSAPP_API_TOKEN", "")
-            api_url = perfil.whatsapp.api_url or os.environ.get(
-                "WHATSAPP_API_URL", ""
-            )
-            if token_wa and api_url:
-                enviadas_wa = await whatsapp.enviar(
-                    api_url, token_wa, perfil.whatsapp.chat_id, mensagens
+                entregue = await whatsapp.enviar(
+                    api_url, token_wa, perfil.whatsapp.chat_id, [mensagem]
+                ) == 1
+            except Exception as exc:
+                logger.warning(
+                    "WhatsApp falhou para %s (%s): %r", perfil.nome, controle, exc
                 )
-                enviadas += enviadas_wa
-                whatsapp_ok = enviadas_wa > 0
-        except Exception as exc:
-            logger.warning("WhatsApp falhou para %s: %r", perfil.nome, exc)
 
-    # Telegram (fallback se WhatsApp falhou e não há canal explícito)
-    usou_fallback = (
-        canal is None and not whatsapp_ok and perfil.whatsapp.chat_id
-    )
-    if canal in (None, "telegram") and token and perfil.chat_id:
-        try:
-            enviadas_tg = await notify.enviar(token, perfil.chat_id, mensagens)
-            enviadas += enviadas_tg
-            if usou_fallback and enviadas_tg > 0:
-                logger.info(
-                    "Fallback: Telegram usado para %s (WhatsApp falhou)",
-                    perfil.nome,
+        if usar_telegram and token and perfil.chat_id:
+            try:
+                entregue = (
+                    await notify.enviar(token, perfil.chat_id, [mensagem]) == 1
+                    or entregue
                 )
-        except Exception as exc:
-            logger.warning("Telegram falhou para %s: %r", perfil.nome, exc)
+            except Exception as exc:
+                logger.warning(
+                    "Telegram falhou para %s (%s): %r", perfil.nome, controle, exc
+                )
 
-    return enviadas
+        if entregue:
+            entregues.add(controle)
+
+    return entregues
 
 
 async def _rodar(
@@ -269,9 +295,28 @@ async def _rodar(
     canal: str | None = None,
     sem_backup: bool = False,
     sem_health_check: bool = False,
+    portal: str | None = None,
 ) -> None:
     config = _carregar_config(caminho)
-    token = "" if seco else _token_telegram()
+    if portal:
+        config.portais = [portal]
+
+    perfis = config.perfis_resolvidos()
+    if nome_perfil:
+        perfis = [p for p in perfis if p.nome == nome_perfil]
+        if not perfis:
+            nomes = ", ".join(p.nome for p in config.perfis_resolvidos())
+            print(
+                f"Erro: perfil '{nome_perfil}' nao encontrado. "
+                f"Disponiveis: {nomes}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+    precisa_telegram = canal in (None, "all", "telegram") and any(
+        perfil.chat_id for perfil in perfis
+    )
+    token = _token_telegram() if not seco and precisa_telegram else ""
     store = Store()
     cache = CachePncp()
 
@@ -292,18 +337,6 @@ async def _rodar(
     publicacoes = await _buscar_portais(config, dias, cache)
     tempo_busca = time.monotonic() - t0
 
-    perfis = config.perfis_resolvidos()
-    if nome_perfil:
-        perfis = [p for p in perfis if p.nome == nome_perfil]
-        if not perfis:
-            nomes = ", ".join(p.nome for p in config.perfis_resolvidos())
-            print(
-                f"Erro: perfil '{nome_perfil}' nao encontrado. "
-                f"Disponiveis: {nomes}",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-
     async def _processar_e_enviar(perfil: Perfil) -> tuple[int, int]:
         """Processa um perfil e retorna (total, enviadas)."""
         novos = _processar_perfil(perfil, publicacoes, store, seco)
@@ -320,14 +353,14 @@ async def _rodar(
         controles: list[str] = []
         eh_lembrete: list[bool] = []
         metadados: list[dict[str, Any]] = []
-        for item, resultado in novos:
+        for item, resultado, lembrete in novos:
             item_dict = _para_dict(item)
             resumo = await llm.resumir(item_dict)
             mensagens.append(
                 notify.formatar_alerta(item_dict, resultado, resumo)
             )
             controles.append(item.controle)
-            eh_lembrete.append(_dias_restantes(item) <= 2)
+            eh_lembrete.append(lembrete)
             metadados.append({
                 "objeto": item.objeto[:200],
                 "valor": item.valor,
@@ -346,12 +379,20 @@ async def _rodar(
                 print(f"  {mensagem}")
             return len(novos), 0
 
-        enviadas = await _enviar_notificacoes(
+        entregues = await _enviar_notificacoes(
             perfil, mensagens, controles, token, canal
         )
-        store.marcar_alertados(
-            controles, perfil=perfil.nome, metadados=metadados
-        )
+        controles_entregues = [c for c in controles if c in entregues]
+        metadados_entregues = [
+            meta for c, meta in zip(controles, metadados, strict=True) if c in entregues
+        ]
+        if controles_entregues:
+            store.marcar_alertados(
+                controles_entregues,
+                perfil=perfil.nome,
+                metadados=metadados_entregues,
+            )
+        enviadas = len(controles_entregues)
         store.registrar_metrica(
             perfil.nome, "alertas_enviados", str(enviadas)
         )
@@ -583,6 +624,7 @@ def main() -> None:
     )
     rodar_parser.add_argument(
         "--portal",
+        choices=["pncp", "comprasnet"],
         help="Consulta apenas um portal (pncp, comprasnet)",
     )
     rodar_parser.add_argument(
@@ -655,6 +697,7 @@ def main() -> None:
                 getattr(argumentos, "canal", None),
                 getattr(argumentos, "sem_backup", False),
                 getattr(argumentos, "sem_health_check", False),
+                getattr(argumentos, "portal", None),
             )
         )
     elif argumentos.comando == "test-regras":

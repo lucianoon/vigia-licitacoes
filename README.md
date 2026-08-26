@@ -80,6 +80,9 @@ uv run vigia run --dry-run
 # Rodar apenas um perfil especifico
 uv run vigia run --perfil "Climatizacao SP"
 
+# Restringir a consulta e/ou o canal
+uv run vigia run --portal pncp --canal telegram
+
 # Digest semanal (resumo consolidado)
 uv run vigia digest
 uv run vigia digest --enviar  # envia no Telegram
@@ -164,6 +167,24 @@ uv run mypy src
 
 Logs detalhados: `VIGIA_LOG_LEVEL=DEBUG`.
 
+## Docker
+
+O container executa um ciclo e termina. Para rodar manualmente:
+
+```bash
+docker compose run --rm vigia run
+```
+
+Para agendar, execute esse comando pelo cron ou por outro scheduler. O histórico e os
+backups ficam em `./data`. O Compose não usa política de reinício automático para evitar
+que um processo de ciclo único rode em loop e envie alertas repetidamente.
+
+Variáveis úteis:
+
+- `VIGIA_DB_PATH`: caminho do SQLite (padrão: `vigia.db`)
+- `VIGIA_BACKUP_DIR`: diretório de backups (padrão: `./backups`)
+- `VIGIA_BACKUP_KEEP`: quantidade máxima de backups preservados (padrão: 30)
+
 ## Roadmap
 
 - [x] v0.1 — poll PNCP, regras YAML, Telegram, dedup SQLite, LLM opcional
@@ -172,7 +193,7 @@ Logs detalhados: `VIGIA_LOG_LEVEL=DEBUG`.
 - [x] Digest semanal consolidado
 - [x] Cache local PNCP (evita requests duplicados)
 - [x] Dashboard HTML (historico + metricas)
-- [ ] Alertas por WhatsApp (WhatsApp Business API)
+- [x] Alertas por WhatsApp via Evolution API
 - [ ] Multi-portal (Petronect, ComprasNet, BNB)
 - [ ] API REST para integracao
 - [ ] Modo SaaS (multi-tenant com auth)

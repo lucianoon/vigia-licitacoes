@@ -75,9 +75,12 @@ def formatar_alerta(item: dict[str, Any], resultado: Any, resumo_llm: str | None
     linhas.append(resumo)
 
     controle = str(item.get("numeroControlePNCP") or "")
-    if controle:
+    url = str(item.get("_url") or "")
+    if not url and controle:
+        url = f"https://pncp.gov.br/app/editais/{controle}"
+    if url:
         linhas.append("")
-        linhas.append(f"🔗 https://pncp.gov.br/app/editais/{controle}")
+        linhas.append(f"🔗 {url}")
     return "\n".join(linhas)
 
 
@@ -101,7 +104,8 @@ def _formatar_prazo(data_encerramento: Any) -> str:
         momento = datetime.fromisoformat(str(data_encerramento))
     except ValueError:
         return f"Prazo: {data_encerramento}"
-    restantes = (momento - datetime.now()).days
+    agora = datetime.now(momento.tzinfo) if momento.tzinfo else datetime.now()
+    restantes = (momento - agora).days
     quando = momento.strftime("%d/%m %H:%M")
     if restantes < 0:
         return f"Encerrado em {quando}"

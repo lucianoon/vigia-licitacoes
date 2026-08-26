@@ -47,6 +47,11 @@ def _gerar_html(
 
     # Historico rows as JSON for filtering
     historico_json = json.dumps(historico[:200], ensure_ascii=False, default=str)
+    historico_json = (
+        historico_json.replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
 
     # Metricas gerais
     linhas_metricas = ""
@@ -148,7 +153,7 @@ def _gerar_html(
     </div>
     <div class="card">
       <h3>Alertas enviados (30d)</h3>
-      <div class="num">{sum(v for v in metricas.values())}</div>
+      <div class="num">{metricas.get('alertas_enviados', 0)}</div>
     </div>
   </div>
 
@@ -220,6 +225,12 @@ function fmtValor(v) {{
   return 'R$ ' + v.toLocaleString('pt-BR');
 }}
 
+function escHtml(v) {{
+  const div = document.createElement('div');
+  div.textContent = String(v ?? '');
+  return div.innerHTML;
+}}
+
 function aplicarFiltros() {{
   const perfil = document.getElementById('filter-perfil').value;
   const portal = document.getElementById('filter-portal').value;
@@ -242,13 +253,13 @@ function aplicarFiltros() {{
 
   tbody.innerHTML = filtrado.map(h => `
     <tr>
-      <td>${{(h.visto_em || '').slice(0, 16)}}</td>
-      <td>${{h.perfil || ''}}</td>
-      <td>${{h.portal || ''}}</td>
-      <td title="${{(h.objeto || '').replace(/"/g, '&quot;')}}">
-        ${{(h.objeto || '').slice(0, 80)}}
+      <td>${{escHtml((h.visto_em || '').slice(0, 16))}}</td>
+      <td>${{escHtml(h.perfil)}}</td>
+      <td>${{escHtml(h.portal)}}</td>
+      <td title="${{escHtml(h.objeto)}}">
+        ${{escHtml((h.objeto || '').slice(0, 80))}}
       </td>
-      <td>${{h.regra || ''}}</td>
+      <td>${{escHtml(h.regra)}}</td>
       <td class="valor">${{fmtValor(h.valor)}}</td>
     </tr>
   `).join('');

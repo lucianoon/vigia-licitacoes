@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -21,10 +22,10 @@ CREATE TABLE IF NOT EXISTS cache_pncp (
 class CachePncp:
     def __init__(
         self,
-        caminho: str = "vigia.db",
+        caminho: str | None = None,
         ttl: timedelta = TTL_PADRAO,
     ) -> None:
-        self.caminho = Path(caminho)
+        self.caminho = Path(caminho or os.environ.get("VIGIA_DB_PATH", "vigia.db"))
         self.caminho.parent.mkdir(parents=True, exist_ok=True)
         self.ttl = ttl
         self._con = self._conectar()

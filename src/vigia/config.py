@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Self
 
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, model_validator
 
 DEFAULT_PATHS = ("vigia.yaml", "~/.config/vigia/vigia.yaml")
 
@@ -61,6 +61,21 @@ class Config(BaseModel):
     regras: list[Regra] = []
     perfis: list[Perfil] = []
     portais: list[str] = []
+
+    @model_validator(mode="after")
+    def validar_identificadores(self) -> Self:
+        desconhecidos = sorted(set(self.portais) - {"pncp", "comprasnet"})
+        if desconhecidos:
+            raise ValueError(f"portais desconhecidos: {', '.join(desconhecidos)}")
+        if {"pncp", "comprasnet"}.issubset(self.portais):
+            raise ValueError(
+                "pncp e comprasnet usam a mesma fonte; configure apenas um deles"
+            )
+        nomes = [perfil.nome for perfil in self.perfis_resolvidos()]
+        duplicados = sorted({nome for nome in nomes if nomes.count(nome) > 1})
+        if duplicados:
+            raise ValueError(f"nomes de perfil duplicados: {', '.join(duplicados)}")
+        return self
 
     def perfis_resolvidos(self) -> list[Perfil]:
         if self.perfis:

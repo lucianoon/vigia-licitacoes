@@ -11,6 +11,7 @@ set -euo pipefail
 VIGIA_DIR="$(cd "$(dirname "$0")" && pwd)"
 VIGIA_DB="$VIGIA_DIR/vigia.db"
 VIGIA_LOG="$VIGIA_DIR/vigia.log"
+VIGIA_ENV="$VIGIA_DIR/.env"
 CRON_TAG="# vigia-licitacoes"
 
 echo "=== Vigia — Setup de Deploy Local ==="
@@ -55,13 +56,27 @@ if [ -z "${TELEGRAM_TOKEN:-}" ]; then
     echo "  Depois volte aqui e execute novamente: ./setup.sh"
     exit 1
 else
-    echo "  TELEGRAM_TOKEN definido (${TELEGRAM_TOKEN:0:8}...)"
+    umask 077
+    {
+        printf 'TELEGRAM_TOKEN=%q\n' "$TELEGRAM_TOKEN"
+        [ -z "${OPENAI_API_KEY:-}" ] || printf 'OPENAI_API_KEY=%q\n' "$OPENAI_API_KEY"
+        [ -z "${WHATSAPP_API_TOKEN:-}" ] || printf 'WHATSAPP_API_TOKEN=%q\n' "$WHATSAPP_API_TOKEN"
+        [ -z "${WHATSAPP_API_URL:-}" ] || printf 'WHATSAPP_API_URL=%q\n' "$WHATSAPP_API_URL"
+    } > "$VIGIA_ENV"
+    chmod 600 "$VIGIA_ENV"
+    echo "  Credenciais salvas em $VIGIA_ENV (permissão restrita)."
 fi
 
 # 4. Verificar configuração
 echo
 echo "[4/6] Verificando vigia.yaml..."
-if grep -q "COLOQUE_SEU_CHAT_ID_AQUI" "$VIGIA_DIR/vigia.yaml" 2>/dev/null; then
+if [ ! -f "$VIGIA_DIR/vigia.yaml" ]; then
+    cp "$VIGIA_DIR/vigia.example.yaml" "$VIGIA_DIR/vigia.yaml"
+    echo "  Criado $VIGIA_DIR/vigia.yaml a partir do exemplo."
+    echo "  Edite o arquivo e execute ./setup.sh novamente."
+    exit 1
+elif cmp -s "$VIGIA_DIR/vigia.yaml" "$VIGIA_DIR/vigia.example.yaml" \
+    || grep -q "COLOQUE_SEU_CHAT_ID_AQUI" "$VIGIA_DIR/vigia.yaml" 2>/dev/null; then
     echo "  ⚠️  vigia.yaml ainda tem chat_id de exemplo."
     echo
     echo "  Para descobrir seu chat_id:"
@@ -79,11 +94,15 @@ fi
 
 # 5. Testar conexão
 echo
-echo "[5/6] Testando conexão com o PNCP..."
-if uv run vigia test-regras "manutenção preventiva de ar-condicionado" --config "$VIGIA_DIR/vigia.yaml" 2>/dev/null | grep -q "✅"; then
+echo "[5/6] Testando configuração e regras..."
+TESTE_REGRAS="$(
+    uv run vigia test-regras "manutenção preventiva de ar-condicionado" \
+        --config "$VIGIA_DIR/vigia.yaml" 2>/dev/null || true
+)"
+if grep -q "score" <<< "$TESTE_REGRAS"; then
     echo "  ✅ Regras funcionando."
 else
-    echo "  ⚠️  Teste de regras falhou (pode ser normal se o PNCP estiver fora)."
+    echo "  ⚠️  Nenhuma regra casou com o texto de teste; revise o vigia.yaml."
 fi
 
 # 6. Configurar cron
@@ -91,7 +110,7 @@ echo
 echo "[6/6] Configurando cron..."
 
 # Gerar entrada do cron
-CRON_CMD="0 7,12,18 * * * cd $VIGIA_DIR && TELEGRAM_TOKEN=\"\$TELEGRAM_TOKEN\" uv run vigia run >> $VIGIA_LOG 2>&1"
+CRON_CMD="0 7,12,18 * * * cd \"$VIGIA_DIR\" && . \"$VIGIA_ENV\" && uv run vigia run >> \"$VIGIA_LOG\" 2>&1"
 
 # Verificar se já existe
 if crontab -l 2>/dev/null | grep -qF "$CRON_TAG"; then
