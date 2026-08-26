@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from vigia import llm, matcher, notify
@@ -19,13 +20,33 @@ from vigia.store import Store
 logger = logging.getLogger(__name__)
 
 
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry, ensure_ascii=False)
+
+
 def _configurar_logging() -> None:
     nivel = os.environ.get("VIGIA_LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=getattr(logging, nivel, logging.INFO),
-        stream=sys.stderr,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    formato = os.environ.get("VIGIA_LOG_FORMAT", "text")
+
+    if formato == "json":
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+
+    logging.basicConfig(level=getattr(logging, nivel, logging.INFO), handlers=[handler])
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
@@ -62,6 +83,43 @@ def _carregar_config(caminho: str | None) -> Config:
         sys.exit(2)
 
 
+async def _verificar_ou_avisar(config: Config) -> bool:
+    """Verifica saúde dos portais. Retorna True se OK."""
+    from vigia import registry
+
+    nomes_portais = config.portais or ["pncp"]
+    portais = registry.criar_portais(nomes_portais)
+
+    todos_ok = True
+    for portal in portais:
+        if hasattr(portal, "verificar_saude"):
+            ok = await portal.verificar_saude()
+            if not ok:
+                logger.warning("Portal %s esta indisponivel", portal.nome)
+                print(f"  Aviso: {portal.nome} esta indisponivel.", file=sys.stderr)
+                todos_ok = False
+    return todos_ok
+
+
+def _backup_automatico(store: Store) -> str | None:
+    """Gera backup CSV antes de rodar. Retorna caminho ou None."""
+    total = store.total()
+    if total == 0:
+        return None
+
+    from vigia.exporter import exportar_csv
+
+    try:
+        agora = datetime.now().strftime("%Y-%m-%d_%H%M")
+        backup_dir = os.path.join(os.getcwd(), "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        caminho = os.path.join(backup_dir, f"backup_{agora}.csv")
+        return exportar_csv(store, caminho_saida=caminho)
+    except Exception as exc:
+        logger.warning("Backup falhou: %r", exc)
+        return None
+
+
 async def _buscar_portais(
     config: Config, dias: int, cache: CachePncp | None = None
 ) -> list[Publicacao]:
@@ -82,12 +140,17 @@ async def _buscar_portais(
     for portal in portais:
         print(f"Consultando {portal.nome} ({inicio} a {fim})...")
         try:
-            publicacoes = await portal.buscar(inicio, fim, sorted(todas_modalidades))
+            publicacoes = await portal.buscar(
+                inicio, fim, sorted(todas_modalidades)
+            )
             print(f"  {len(publicacoes)} publicacoes de {portal.nome}.")
             todas.extend(publicacoes)
         except Exception as exc:
             logger.warning("Portal %s falhou: %r (continuando)", portal.nome, exc)
-            print(f"  Aviso: {portal.nome} falhou ({exc}), continuando com outros portais.")
+            print(
+                f"  Aviso: {portal.nome} falhou ({exc}), "
+                f"continuando com outros portais."
+            )
 
     return todas
 
@@ -157,27 +220,43 @@ async def _enviar_notificacoes(
     token: str,
     canal: str | None = None,
 ) -> int:
-    """Envia notificações via Telegram e/ou WhatsApp."""
+    """Envia notificações via Telegram e/ou WhatsApp com fallback."""
     enviadas = 0
 
     # WhatsApp
+    whatsapp_ok = False
     if canal in (None, "whatsapp") and perfil.whatsapp.chat_id:
         try:
             from vigia import whatsapp
+
             token_wa = os.environ.get("WHATSAPP_API_TOKEN", "")
-            api_url = perfil.whatsapp.api_url or os.environ.get("WHATSAPP_API_URL", "")
+            api_url = perfil.whatsapp.api_url or os.environ.get(
+                "WHATSAPP_API_URL", ""
+            )
             if token_wa and api_url:
                 enviadas_wa = await whatsapp.enviar(
                     api_url, token_wa, perfil.whatsapp.chat_id, mensagens
                 )
                 enviadas += enviadas_wa
+                whatsapp_ok = enviadas_wa > 0
         except Exception as exc:
             logger.warning("WhatsApp falhou para %s: %r", perfil.nome, exc)
 
-    # Telegram
+    # Telegram (fallback se WhatsApp falhou e não há canal explícito)
+    usou_fallback = (
+        canal is None and not whatsapp_ok and perfil.whatsapp.chat_id
+    )
     if canal in (None, "telegram") and token and perfil.chat_id:
-        enviadas_tg = await notify.enviar(token, perfil.chat_id, mensagens)
-        enviadas += enviadas_tg
+        try:
+            enviadas_tg = await notify.enviar(token, perfil.chat_id, mensagens)
+            enviadas += enviadas_tg
+            if usou_fallback and enviadas_tg > 0:
+                logger.info(
+                    "Fallback: Telegram usado para %s (WhatsApp falhou)",
+                    perfil.nome,
+                )
+        except Exception as exc:
+            logger.warning("Telegram falhou para %s: %r", perfil.nome, exc)
 
     return enviadas
 
@@ -188,11 +267,26 @@ async def _rodar(
     seco: bool = False,
     nome_perfil: str | None = None,
     canal: str | None = None,
+    sem_backup: bool = False,
+    sem_health_check: bool = False,
 ) -> None:
     config = _carregar_config(caminho)
     token = "" if seco else _token_telegram()
     store = Store()
     cache = CachePncp()
+
+    # Backup automático
+    if not sem_backup and not seco:
+        backup = _backup_automatico(store)
+        if backup:
+            print(f"Backup: {backup}")
+
+    # Health check
+    if not sem_health_check:
+        print("Verificando portais...")
+        ok = await _verificar_ou_avisar(config)
+        if not ok:
+            print("  Alguns portais estao indisponiveis. Continuando...", file=sys.stderr)
 
     t0 = time.monotonic()
     publicacoes = await _buscar_portais(config, dias, cache)
@@ -217,7 +311,10 @@ async def _rodar(
             print(f"\n--- Perfil: {perfil.nome} (0 novas oportunidades) ---")
             return 0, 0
 
-        print(f"\n--- Perfil: {perfil.nome} ({len(novos)} novas oportunidades) ---")
+        print(
+            f"\n--- Perfil: {perfil.nome} "
+            f"({len(novos)} novas oportunidades) ---"
+        )
 
         mensagens: list[str] = []
         controles: list[str] = []
@@ -226,7 +323,9 @@ async def _rodar(
         for item, resultado in novos:
             item_dict = _para_dict(item)
             resumo = await llm.resumir(item_dict)
-            mensagens.append(notify.formatar_alerta(item_dict, resultado, resumo))
+            mensagens.append(
+                notify.formatar_alerta(item_dict, resultado, resumo)
+            )
             controles.append(item.controle)
             eh_lembrete.append(_dias_restantes(item) <= 2)
             metadados.append({
@@ -241,13 +340,21 @@ async def _rodar(
                 zip(mensagens, eh_lembrete, strict=True), start=1
             ):
                 tag = " [LEMBRETE]" if lembrete else ""
-                print(f"\n  [Dry-run] Alerta {indice}/{len(mensagens)}{tag}:")
+                print(
+                    f"\n  [Dry-run] Alerta {indice}/{len(mensagens)}{tag}:"
+                )
                 print(f"  {mensagem}")
             return len(novos), 0
 
-        enviadas = await _enviar_notificacoes(perfil, mensagens, controles, token, canal)
-        store.marcar_alertados(controles, perfil=perfil.nome, metadados=metadados)
-        store.registrar_metrica(perfil.nome, "alertas_enviados", str(enviadas))
+        enviadas = await _enviar_notificacoes(
+            perfil, mensagens, controles, token, canal
+        )
+        store.marcar_alertados(
+            controles, perfil=perfil.nome, metadados=metadados
+        )
+        store.registrar_metrica(
+            perfil.nome, "alertas_enviados", str(enviadas)
+        )
         print(f"  {enviadas} alerta(s) enviado(s).")
         return len(novos), enviadas
 
@@ -262,7 +369,9 @@ async def _rodar(
     for i, resultado in enumerate(resultados):
         if isinstance(resultado, BaseException):
             logger.error("Perfil %s falhou: %r", perfis[i].nome, resultado)
-            print(f"\n--- Perfil: {perfis[i].nome} --- ERRO: {resultado}")
+            print(
+                f"\n--- Perfil: {perfis[i].nome} --- ERRO: {resultado}"
+            )
             continue
         t, e = resultado
         total_geral += t
@@ -272,9 +381,15 @@ async def _rodar(
 
     portais_usados = config.portais or ["pncp"]
     if seco:
-        print(f"\nDry-run concluido: {total_geral} oportunidade(s) NAO enviada(s).")
+        print(
+            f"\nDry-run concluido: {total_geral} oportunidade(s) "
+            f"NAO enviada(s)."
+        )
     else:
-        print(f"\nTotal: {total_geral} oportunidade(s), {total_enviadas} alerta(s) enviados.")
+        print(
+            f"\nTotal: {total_geral} oportunidade(s), "
+            f"{total_enviadas} alerta(s) enviados."
+        )
     print(
         f"Portais: {', '.join(portais_usados)} | "
         f"Tempo: {tempo_busca:.1f}s | Cache: {cache.total()}"
@@ -297,18 +412,27 @@ def _testar_regras(caminho: str | None, texto: str) -> None:
             if resultado:
                 achou = True
                 achou_perfil = True
-                print(f"  [{perfil.nome}] {resultado.regra} (score {resultado.score})")
+                print(
+                    f"  [{perfil.nome}] {resultado.regra} "
+                    f"(score {resultado.score})"
+                )
                 print(f"    casou: {', '.join(resultado.termos_casados)}")
                 if resultado.destaques:
-                    print(f"    destaques: {', '.join(resultado.destaques)}")
+                    print(
+                        f"    destaques: {', '.join(resultado.destaques)}"
+                    )
         if not achou_perfil:
             print(f"  [{perfil.nome}] nenhuma regra casou.")
 
     if not achou:
-        print("\nNenhuma regra casou com o texto informado em nenhum perfil.")
+        print(
+            "\nNenhuma regra casou com o texto informado em nenhum perfil."
+        )
 
 
-def _gerar_digest(caminho: str | None, nome_perfil: str | None, enviar: bool) -> None:
+def _gerar_digest(
+    caminho: str | None, nome_perfil: str | None, enviar: bool
+) -> None:
     config = _carregar_config(caminho)
     store = Store()
 
@@ -327,7 +451,9 @@ def _gerar_digest(caminho: str | None, nome_perfil: str | None, enviar: bool) ->
     token = _token_telegram() if enviar else ""
 
     for perfil in perfis:
-        itens: list[dict[str, Any]] = store.resumo_semanal(perfil=perfil.nome)
+        itens: list[dict[str, Any]] = store.resumo_semanal(
+            perfil=perfil.nome
+        )
         if not itens:
             print(f"\n--- {perfil.nome}: nada esta semana ---")
             continue
@@ -375,9 +501,7 @@ def _gerar_digest(caminho: str | None, nome_perfil: str | None, enviar: bool) ->
         print(f"{'=' * 50}")
 
         if enviar and token:
-            asyncio.run(
-                notify.enviar(token, perfil.chat_id, [digest])
-            )
+            asyncio.run(notify.enviar(token, perfil.chat_id, [digest]))
             print("  Digest enviado para o Telegram.")
 
     store.fechar()
@@ -413,7 +537,10 @@ def _exportar(
         print(f"XLSX exportado: {caminho_xlsx}")
         print(f"Abra no Finder: open {os.path.abspath(caminho_xlsx)}")
     else:
-        print(f"Formato nao suportado: {formato}. Use: csv ou xlsx", file=sys.stderr)
+        print(
+            f"Formato nao suportado: {formato}. Use: csv ou xlsx",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
     store.fechar()
@@ -451,7 +578,8 @@ def main() -> None:
         help="Mostra os alertas sem enviar nem marcar como vistos",
     )
     rodar_parser.add_argument(
-        "--perfil", help="Executa apenas um perfil especifico (pelo nome)",
+        "--perfil",
+        help="Executa apenas um perfil especifico (pelo nome)",
     )
     rodar_parser.add_argument(
         "--portal",
@@ -460,6 +588,14 @@ def main() -> None:
     rodar_parser.add_argument(
         "--canal", choices=["telegram", "whatsapp", "all"],
         help="Canal de notificacao (padrao: todos configurados)",
+    )
+    rodar_parser.add_argument(
+        "--sem-backup", action="store_true",
+        help="Desabilita backup automatico antes de rodar",
+    )
+    rodar_parser.add_argument(
+        "--sem-health-check", action="store_true",
+        help="Desabilita verificacao de saude dos portais",
     )
 
     testar_parser = subparsers.add_parser(
@@ -473,7 +609,8 @@ def main() -> None:
     )
     digest_parser.add_argument("--config", help="Caminho do vigia.yaml")
     digest_parser.add_argument(
-        "--perfil", help="Gera digest apenas para um perfil especifico"
+        "--perfil",
+        help="Gera digest apenas para um perfil especifico",
     )
     digest_parser.add_argument(
         "--enviar", action="store_true",
@@ -481,7 +618,8 @@ def main() -> None:
     )
 
     export_parser = subparsers.add_parser(
-        "export", help="Exporta historico de alertas para CSV ou XLSX"
+        "export",
+        help="Exporta historico de alertas para CSV ou XLSX",
     )
     export_parser.add_argument("--config", help="Caminho do vigia.yaml")
     export_parser.add_argument(
@@ -489,17 +627,19 @@ def main() -> None:
         help="Formato de exportacao (padrao: csv)",
     )
     export_parser.add_argument(
-        "--perfil", help="Exporta apenas um perfil especifico",
+        "--perfil",
+        help="Exporta apenas um perfil especifico",
     )
     export_parser.add_argument(
-        "--desde", help="Data inicial (YYYY-MM-DD)",
+        "--desde", help="Data inicial (YYYY-MM-DD)"
     )
     export_parser.add_argument(
-        "--ate", help="Data final (YYYY-MM-DD)",
+        "--ate", help="Data final (YYYY-MM-DD)"
     )
 
     dashboard_parser = subparsers.add_parser(
-        "dashboard", help="Gera dashboard HTML com historico e metricas"
+        "dashboard",
+        help="Gera dashboard HTML com historico e metricas",
     )
     dashboard_parser.add_argument("--config", help="Caminho do vigia.yaml")
 
@@ -513,6 +653,8 @@ def main() -> None:
                 argumentos.dry_run,
                 getattr(argumentos, "perfil", None),
                 getattr(argumentos, "canal", None),
+                getattr(argumentos, "sem_backup", False),
+                getattr(argumentos, "sem_health_check", False),
             )
         )
     elif argumentos.comando == "test-regras":

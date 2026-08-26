@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import date, timedelta
 from typing import Any
 
@@ -18,6 +19,8 @@ MAX_PAGINAS = 200
 PAUSA_ENTRE_PAGINAS = 3.0
 ESPERA_RATE_LIMIT = 45.0
 TENTATIVAS_POR_PAGINA = 4
+BACKOFF_BASE = 2.0
+BACKOFF_MAX = 60.0
 
 MODALIDADES_CONHECIDAS = {
     1: "Leilao Eletronico",
@@ -28,6 +31,30 @@ MODALIDADES_CONHECIDAS = {
 
 class PncpError(Exception):
     pass
+
+
+def _backoff(tentativa: int) -> float:
+    """Calcula delay exponencial com jitter."""
+    delay = min(BACKOFF_BASE ** tentativa, BACKOFF_MAX)
+    jitter = random.uniform(0, delay * 0.1)
+    return delay + jitter
+
+
+async def verificar_saude() -> bool:
+    """Verifica se PNCP está acessível."""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            params = {
+                "dataInicial": date.today().strftime("%Y%m%d"),
+                "dataFinal": date.today().strftime("%Y%m%d"),
+                "codigoModalidadeContratacao": "6",
+                "pagina": "1",
+                "tamanhoPagina": "1",
+            }
+            resposta = await client.get(PNCP_URL, params=params)
+            return resposta.status_code == 200
+    except Exception:
+        return False
 
 
 async def _obter_pagina(
@@ -70,25 +97,25 @@ async def _obter_pagina(
                 ultimo_erro = PncpError("HTTP 429: limite de requisições do PNCP")
                 continue
             if resposta.status_code in (502, 503, 504):
+                delay = _backoff(tentativa)
                 logger.warning(
                     "PNCP indisponível (HTTP %d, modalidade %d, página %d); "
-                    "tentativa %d/%d",
+                    "tentativa %d/%d, retry em %.1fs",
                     resposta.status_code,
                     codigo_modalidade,
                     pagina,
                     tentativa + 1,
                     TENTATIVAS_POR_PAGINA,
+                    delay,
                 )
-                ultimo_erro = PncpError(
-                    f"HTTP {resposta.status_code} do PNCP"
-                )
-                if tentativa < TENTATIVAS_POR_PAGINA - 1:
-                    await asyncio.sleep(5.0 * (tentativa + 1))
+                ultimo_erro = PncpError(f"HTTP {resposta.status_code} do PNCP")
+                await asyncio.sleep(delay)
                 continue
             if resposta.status_code >= 400:
                 raise PncpError(
                     f"HTTP {resposta.status_code} na consulta do PNCP "
-                    f"(modalidade {codigo_modalidade}, página {pagina}): {resposta.text[:200]}"
+                    f"(modalidade {codigo_modalidade}, página {pagina}): "
+                    f"{resposta.text[:200]}"
                 )
             try:
                 dados: dict[str, Any] = resposta.json()
@@ -99,15 +126,16 @@ async def _obter_pagina(
             return dados
         except httpx.TransportError as exc:
             ultimo_erro = exc
+            delay = _backoff(tentativa)
             logger.warning(
-                "Tentativa %d falhou (modalidade %d, página %d): %r",
+                "Tentativa %d falhou (modalidade %d, página %d): %r, retry em %.1fs",
                 tentativa + 1,
                 codigo_modalidade,
                 pagina,
                 exc,
+                delay,
             )
-            if tentativa < TENTATIVAS_POR_PAGINA - 1:
-                await asyncio.sleep(2.0 * (tentativa + 1))
+            await asyncio.sleep(delay)
     raise PncpError(
         f"PNCP indisponível após {TENTATIVAS_POR_PAGINA} tentativas "
         f"(modalidade {codigo_modalidade}, página {pagina}): {ultimo_erro}"
@@ -158,11 +186,15 @@ class PncpPortal(Portal):
         if data_final < data_inicial:
             raise ValueError("data_final deve ser posterior ou igual a data_inicial.")
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0)
+        ) as client:
             publicacoes: list[dict[str, Any]] = []
             for codigo in modalidades:
                 publicacoes.extend(
-                    await _buscar_modalidade(client, data_inicial, data_final, codigo, self._cache)
+                    await _buscar_modalidade(
+                        client, data_inicial, data_final, codigo, self._cache
+                    )
                 )
                 await asyncio.sleep(PAUSA_ENTRE_PAGINAS)
 
