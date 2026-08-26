@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from vigia.cache import CachePncp
+from vigia.portal import Portal, Publicacao
 
 logger = logging.getLogger(__name__)
 
@@ -113,26 +114,6 @@ async def _obter_pagina(
     ) from ultimo_erro
 
 
-async def buscar_publicacoes(
-    data_inicial: date,
-    data_final: date,
-    modalidades: list[int],
-    cache: CachePncp | None = None,
-) -> list[dict[str, Any]]:
-    """Busca todas as contratações publicadas no período, por modalidade, paginando."""
-    if data_final < data_inicial:
-        raise ValueError("data_final deve ser posterior ou igual a data_inicial.")
-
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-        publicacoes: list[dict[str, Any]] = []
-        for codigo in modalidades:
-            publicacoes.extend(
-                await _buscar_modalidade(client, data_inicial, data_final, codigo, cache)
-            )
-            await asyncio.sleep(PAUSA_ENTRE_PAGINAS)
-        return publicacoes
-
-
 async def _buscar_modalidade(
     client: httpx.AsyncClient,
     data_inicial: date,
@@ -158,6 +139,46 @@ async def _buscar_modalidade(
 
     logger.info("Modalidade %d: %d publicações no período.", codigo_modalidade, len(itens))
     return itens
+
+
+class PncpPortal(Portal):
+    """Portal Nacional de Contratações Públicas."""
+
+    nome = "pncp"
+
+    def __init__(self, cache: CachePncp | None = None) -> None:
+        self._cache = cache
+
+    async def buscar(
+        self,
+        data_inicial: date,
+        data_final: date,
+        modalidades: list[int],
+    ) -> list[Publicacao]:
+        if data_final < data_inicial:
+            raise ValueError("data_final deve ser posterior ou igual a data_inicial.")
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            publicacoes: list[dict[str, Any]] = []
+            for codigo in modalidades:
+                publicacoes.extend(
+                    await _buscar_modalidade(client, data_inicial, data_final, codigo, self._cache)
+                )
+                await asyncio.sleep(PAUSA_ENTRE_PAGINAS)
+
+        return [Publicacao.do_pncp(item) for item in publicacoes]
+
+
+async def buscar_publicacoes(
+    data_inicial: date,
+    data_final: date,
+    modalidades: list[int],
+    cache: CachePncp | None = None,
+) -> list[dict[str, Any]]:
+    """Busca todas as contratações publicadas no período (backward compatible)."""
+    portal = PncpPortal(cache=cache)
+    publicacoes = await portal.buscar(data_inicial, data_final, modalidades)
+    return [p.dados_raw for p in publicacoes]
 
 
 def janela_padrao(hoje: date | None = None, dias: int = 2) -> tuple[date, date]:

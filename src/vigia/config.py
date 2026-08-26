@@ -12,6 +12,16 @@ class TelegramConfig(BaseModel):
     chat_id: str
 
 
+class WhatsAppConfig(BaseModel):
+    chat_id: str = ""
+    api_url: str = ""
+
+
+class NotificacaoConfig(BaseModel):
+    telegram: TelegramConfig = TelegramConfig(chat_id="")
+    whatsapp: WhatsAppConfig = WhatsAppConfig()
+
+
 class FiltrosGlobais(BaseModel):
     ufs: list[str] = []
     valor_minimo: float | None = None
@@ -29,17 +39,28 @@ class Regra(BaseModel):
 
 class Perfil(BaseModel):
     nome: str
-    telegram: TelegramConfig
+    telegram: TelegramConfig = TelegramConfig(chat_id="")
+    whatsapp: WhatsAppConfig = WhatsAppConfig()
+    notificacao: NotificacaoConfig | None = None
     regras: list[Regra]
     filtros_globais: FiltrosGlobais = FiltrosGlobais()
+
+    @property
+    def chat_id(self) -> str:
+        """Retorna chat_id do Telegram (backward compatible)."""
+        if self.notificacao:
+            return self.notificacao.telegram.chat_id
+        return self.telegram.chat_id
 
 
 class Config(BaseModel):
     perfil: dict[str, str] = {}
     telegram: TelegramConfig = TelegramConfig(chat_id="")
+    whatsapp: WhatsAppConfig = WhatsAppConfig()
     filtros_globais: FiltrosGlobais = FiltrosGlobais()
     regras: list[Regra] = []
     perfis: list[Perfil] = []
+    portais: list[str] = []
 
     def perfis_resolvidos(self) -> list[Perfil]:
         if self.perfis:
@@ -48,6 +69,7 @@ class Config(BaseModel):
             Perfil(
                 nome=self.perfil.get("nome", "Padrao"),
                 telegram=self.telegram,
+                whatsapp=self.whatsapp,
                 regras=self.regras,
                 filtros_globais=self.filtros_globais,
             )
@@ -114,6 +136,8 @@ def _normalizar_perfis(dados: dict[str, Any], arquivo: str) -> dict[str, Any]:
 
     if "telegram" in dados:
         perfil_raiz["telegram"] = dados["telegram"]
+    if "whatsapp" in dados:
+        perfil_raiz["whatsapp"] = dados["whatsapp"]
     if "regras" in dados:
         perfil_raiz["regras"] = dados["regras"]
     if "filtros_globais" in dados:

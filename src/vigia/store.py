@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS vistos (
     objeto TEXT NOT NULL DEFAULT '',
     valor REAL,
     regra TEXT NOT NULL DEFAULT '',
+    portal TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (controle, perfil)
 )
 """
@@ -93,15 +94,16 @@ class Store:
                 meta.get("objeto", ""),
                 meta.get("valor"),
                 meta.get("regra", ""),
+                meta.get("portal", ""),
             ))
         self._con.executemany(
             "INSERT INTO vistos "
-            "(controle, perfil, visto_em, alertado, semana, objeto, valor, regra) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?, ?) "
+            "(controle, perfil, visto_em, alertado, semana, objeto, valor, regra, portal) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?) "
             "ON CONFLICT(controle, perfil) DO UPDATE SET "
-            "visto_em = ?, alertado = 1, semana = ?, objeto = ?, valor = ?, regra = ?",
+            "visto_em = ?, alertado = 1, semana = ?, objeto = ?, valor = ?, regra = ?, portal = ?",
             [
-                (*row, row[2], row[3], row[4], row[5], row[6])
+                (*row, row[2], row[3], row[4], row[5], row[6], row[7])
                 for row in linhas
             ],
         )
@@ -149,14 +151,16 @@ class Store:
     ) -> list[dict[str, Any]]:
         if perfil:
             linhas = self._con.execute(
-                "SELECT controle, visto_em, semana, objeto, valor, regra FROM vistos "
-                "WHERE perfil = ? AND alertado = 1 ORDER BY visto_em DESC LIMIT ?",
+                "SELECT controle, visto_em, semana, objeto, valor, regra, portal "
+                "FROM vistos WHERE perfil = ? AND alertado = 1 "
+                "ORDER BY visto_em DESC LIMIT ?",
                 (perfil, limite),
             ).fetchall()
         else:
             linhas = self._con.execute(
-                "SELECT controle, visto_em, semana, objeto, valor, regra, perfil FROM vistos "
-                "WHERE alertado = 1 ORDER BY visto_em DESC LIMIT ?",
+                "SELECT controle, visto_em, semana, objeto, valor, regra, perfil, portal "
+                "FROM vistos WHERE alertado = 1 "
+                "ORDER BY visto_em DESC LIMIT ?",
                 (limite,),
             ).fetchall()
         return [
@@ -167,7 +171,8 @@ class Store:
                 "objeto": row[3],
                 "valor": row[4],
                 "regra": row[5],
-                **({"perfil": row[6]} if len(row) > 6 else {}),
+                "portal": row[6] if len(row) > 6 else "",
+                **({"perfil": row[7]} if len(row) > 7 else {}),
             }
             for row in linhas
         ]

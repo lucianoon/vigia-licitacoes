@@ -19,6 +19,9 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+xlsx = ["openpyxl>=3.1"]
+
 [project.scripts]
 vigia = "vigia.cli:main"
 

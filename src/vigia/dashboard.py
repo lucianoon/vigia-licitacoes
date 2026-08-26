@@ -180,8 +180,8 @@ def _gerar_html(
     <h2>Historico recente (ultimos 50)</h2>
     <div class="card">
       <table>
-        <thead><tr><th>Data</th><th>Perfil</th><th>Objeto</th><th>Regra</th><th>Valor</th></tr></thead>
-        <tbody>{linhas_historico or '<tr><td colspan="5">Nenhum item ainda</td></tr>'}</tbody>
+        <thead><tr><th>Data</th><th>Perfil</th><th>Portal</th><th>Objeto</th><th>Regra</th><th>Valor</th></tr></thead>
+        <tbody>{linhas_historico or '<tr><td colspan="6">Nenhum item ainda</td></tr>'}</tbody>
       </table>
     </div>
   </div>
