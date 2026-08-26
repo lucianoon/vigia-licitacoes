@@ -54,6 +54,22 @@ async def _obter_pagina(
                 await asyncio.sleep(ESPERA_RATE_LIMIT)
                 ultimo_erro = PncpError("HTTP 429: limite de requisições do PNCP")
                 continue
+            if resposta.status_code in (502, 503, 504):
+                logger.warning(
+                    "PNCP indisponível (HTTP %d, modalidade %d, página %d); "
+                    "tentativa %d/%d",
+                    resposta.status_code,
+                    codigo_modalidade,
+                    pagina,
+                    tentativa + 1,
+                    TENTATIVAS_POR_PAGINA,
+                )
+                ultimo_erro = PncpError(
+                    f"HTTP {resposta.status_code} do PNCP"
+                )
+                if tentativa < TENTATIVAS_POR_PAGINA - 1:
+                    await asyncio.sleep(5.0 * (tentativa + 1))
+                continue
             if resposta.status_code >= 400:
                 raise PncpError(
                     f"HTTP {resposta.status_code} na consulta do PNCP "

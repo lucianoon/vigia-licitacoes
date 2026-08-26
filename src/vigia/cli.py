@@ -6,7 +6,7 @@ import sys
 from typing import Any
 
 from vigia import llm, matcher, notify, pncp
-from vigia.config import Config
+from vigia.config import Config, Perfil
 from vigia.matcher import ResultadoRegra
 from vigia.store import Store
 
@@ -25,7 +25,7 @@ def _token_telegram() -> str:
     token = os.environ.get("TELEGRAM_TOKEN")
     if not token:
         print(
-            "Erro: variável de ambiente TELEGRAM_TOKEN não definida.\n"
+            "Erro: variavel de ambiente TELEGRAM_TOKEN nao definida.\n"
             "Crie um bot com @BotFather no Telegram e exporte o token.",
             file=sys.stderr,
         )
@@ -41,54 +41,103 @@ def _carregar_config(caminho: str | None) -> Config:
         sys.exit(2)
 
 
-async def _rodar(caminho: str | None, dias: int, seco: bool = False) -> None:
-    config = _carregar_config(caminho)
-    token = "" if seco else _token_telegram()
-    store = Store()
+async def _fetch_publicacoes(
+    config: Config, dias: int
+) -> list[dict[str, Any]]:
+    todas_modalidades: set[int] = set()
+    for perfil in config.perfis_resolvidos():
+        todas_modalidades.update(perfil.filtros_globais.modalidades)
+    todas_modalidades.update(config.filtros_globais.modalidades)
 
     inicio, fim = pncp.janela_padrao(dias=dias)
     print(f"Consultando PNCP ({inicio} a {fim})...")
     try:
         publicacoes = await pncp.buscar_publicacoes(
-            inicio, fim, config.filtros_globais.modalidades
+            inicio, fim, sorted(todas_modalidades)
         )
     except pncp.PncpError as exc:
         print(f"Erro ao consultar o PNCP: {exc}", file=sys.stderr)
         sys.exit(1)
-    print(f"{len(publicacoes)} publicações recebidas.")
+    print(f"{len(publicacoes)} publicacoes recebidas.")
+    return publicacoes
 
+
+def _processar_perfil(
+    perfil: Perfil,
+    publicacoes: list[dict[str, Any]],
+    store: Store,
+    seco: bool,
+    token: str,
+) -> list[tuple[dict[str, Any], ResultadoRegra]]:
     novos: list[tuple[dict[str, Any], ResultadoRegra]] = []
     for item in publicacoes:
         controle = str(item.get("numeroControlePNCP") or "")
-        resultados = matcher.avaliar(item, config.filtros_globais, config.regras)
+        resultados = matcher.avaliar(
+            item, perfil.filtros_globais, perfil.regras
+        )
         if not resultados or not controle:
             continue
-        if seco or store.nao_vistos([controle]):
-            melhores = resultados[0]
-            novos.append((item, melhores))
+        if seco or store.nao_vistos([controle], perfil=perfil.nome):
+            novos.append((item, resultados[0]))
 
-    print(f"{len(novos)} novas oportunidades após filtros e regras.")
-    if not novos:
-        print("Nada novo. Vigia dormindo. 😴")
-        return
+    return novos
 
-    mensagens: list[str] = []
-    controles: list[str] = []
-    for item, resultado in novos:
-        resumo = await llm.resumir(item)
-        mensagens.append(notify.formatar_alerta(item, resultado, resumo))
-        controles.append(str(item.get("numeroControlePNCP")))
+
+async def _rodar(
+    caminho: str | None, dias: int, seco: bool = False, nome_perfil: str | None = None
+) -> None:
+    config = _carregar_config(caminho)
+    token = "" if seco else _token_telegram()
+    store = Store()
+
+    publicacoes = await _fetch_publicacoes(config, dias)
+
+    perfis = config.perfis_resolvidos()
+    if nome_perfil:
+        perfis = [p for p in perfis if p.nome == nome_perfil]
+        if not perfis:
+            nomes = ", ".join(p.nome for p in config.perfis_resolvidos())
+            print(
+                f"Erro: perfil '{nome_perfil}' nao encontrado. "
+                f"Disponiveis: {nomes}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+    total_geral = 0
+    total_enviadas = 0
+
+    for perfil in perfis:
+        novos = _processar_perfil(perfil, publicacoes, store, seco, token)
+        total_geral += len(novos)
+        print(f"\n--- Perfil: {perfil.nome} ({len(novos)} novas oportunidades) ---")
+
+        if not novos:
+            print("  Nada novo para este perfil.")
+            continue
+
+        mensagens: list[str] = []
+        controles: list[str] = []
+        for item, resultado in novos:
+            resumo = await llm.resumir(item)
+            mensagens.append(notify.formatar_alerta(item, resultado, resumo))
+            controles.append(str(item.get("numeroControlePNCP")))
+
+        if seco:
+            for indice, mensagem in enumerate(mensagens, start=1):
+                print(f"\n  [Dry-run] Alerta {indice}/{len(mensagens)}:")
+                print(f"  {mensagem}")
+            continue
+
+        enviadas = await notify.enviar(token, perfil.telegram.chat_id, mensagens)
+        store.marcar_alertados(controles, perfil=perfil.nome)
+        total_enviadas += enviadas
+        print(f"  {enviadas} alerta(s) enviado(s) para o Telegram.")
 
     if seco:
-        for indice, mensagem in enumerate(mensagens, start=1):
-            print(f"\n{'=' * 50}\nALERTA {indice}/{len(mensagens)} (modo dry-run)\n{'=' * 50}")
-            print(mensagem)
-        print(f"\nDry-run concluído: {len(mensagens)} alerta(s) NÃO enviado(s).")
-        return
-
-    enviadas = await notify.enviar(token, config.telegram.chat_id, mensagens)
-    store.marcar_alertados(controles)
-    print(f"✅ {enviadas} alerta(s) enviado(s) para o Telegram.")
+        print(f"\nDry-run concluido: {total_geral} oportunidade(s) NAO enviada(s).")
+    else:
+        print(f"\nTotal: {total_geral} oportunidade(s), {total_enviadas} alerta(s) enviados.")
     store.fechar()
 
 
@@ -98,32 +147,50 @@ def _testar_regras(caminho: str | None, texto: str) -> None:
 
     objeto = normalizar(texto)
     achou = False
-    for regra in config.regras:
-        resultado = avaliar_regra(objeto, regra)
-        if resultado:
-            achou = True
-            print(f"✅ {resultado.regra} (score {resultado.score})")
-            print(f"   casou: {', '.join(resultado.termos_casados)}")
-            if resultado.destaques:
-                print(f"   destaques: {', '.join(resultado.destaques)}")
+
+    for perfil in config.perfis_resolvidos():
+        achou_perfil = False
+        for regra in perfil.regras:
+            resultado = avaliar_regra(objeto, regra)
+            if resultado:
+                achou = True
+                achou_perfil = True
+                print(f"  [{perfil.nome}] {resultado.regra} (score {resultado.score})")
+                print(f"    casou: {', '.join(resultado.termos_casados)}")
+                if resultado.destaques:
+                    print(f"    destaques: {', '.join(resultado.destaques)}")
+        if not achou_perfil:
+            print(f"  [{perfil.nome}] nenhuma regra casou.")
+
     if not achou:
-        print("❌ Nenhuma regra casou com o texto informado.")
+        print("\nNenhuma regra casou com o texto informado em nenhum perfil.")
 
 
 def main() -> None:
     _configurar_logging()
-    parser = argparse.ArgumentParser(prog="vigia", description="Monitor de licitações do PNCP")
+    parser = argparse.ArgumentParser(
+        prog="vigia", description="Monitor de licitacoes do PNCP"
+    )
     subparsers = parser.add_subparsers(dest="comando", required=True)
 
-    rodar_parser = subparsers.add_parser("run", help="Executa um ciclo de monitoramento")
+    rodar_parser = subparsers.add_parser(
+        "run", help="Executa um ciclo de monitoramento"
+    )
     rodar_parser.add_argument("--config", help="Caminho do vigia.yaml")
     rodar_parser.add_argument(
-        "--dias", type=int, default=2, help="Janela de dias do PNCP (padrão 2)"
+        "--dias",
+        type=int,
+        default=2,
+        help="Janela de dias do PNCP (padrao 2)",
     )
     rodar_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Mostra os alertas sem enviar nem marcar como vistos",
+    )
+    rodar_parser.add_argument(
+        "--perfil",
+        help="Executa apenas um perfil especifico (pelo nome)",
     )
 
     testar_parser = subparsers.add_parser(
@@ -135,7 +202,14 @@ def main() -> None:
     argumentos = parser.parse_args()
 
     if argumentos.comando == "run":
-        asyncio.run(_rodar(argumentos.config, argumentos.dias, argumentos.dry_run))
+        asyncio.run(
+            _rodar(
+                argumentos.config,
+                argumentos.dias,
+                argumentos.dry_run,
+                getattr(argumentos, "perfil", None),
+            )
+        )
     elif argumentos.comando == "test-regras":
         _testar_regras(argumentos.config, argumentos.texto)
 

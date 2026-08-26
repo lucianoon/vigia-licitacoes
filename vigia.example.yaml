@@ -1,27 +1,64 @@
-# Exemplo de configuração do Vigia — copie para vigia.yaml e ajuste
-perfil:
-  nome: "ACME Climatização"
+# ============================================================
+# vigia.yaml -- Exemplo multi-perfil
+# ============================================================
+# Cada perfil define: regras, telegram (chat_id), filtros
+# Filtros globais sao herdados por todos os perfis
+# ============================================================
 
-telegram:
-  chat_id: "123456789"
+# --- Config global (herdada por todos os perfis) ---
+pncp:
+  modalidades: [6]  # Pregao Eletronico (padrao)
+  uf: []
 
 filtros_globais:
-  ufs: ["SC", "PR"]
-  valor_minimo: 10000
-  # valor_maximo: 500000
-  modalidades: [6]          # códigos PNCP; 6 = Pregão Eletrônico
-  excluir_orgaos:
-    - "CAMARA MUNICIPAL"
+  valor_minimo: 10000  # R$ 10 mil minimo global
 
-regras:
-  - nome: "Climatização"
-    qualquer:
-      - "climatização"
-      - "ar-condicionado"
-      - "hvac"
-      - "bombas de calor"
-    excluir:
-      - "locação de imóvel"
-    destaque:
-      - "preventiva"
-      - "registro de preços"
+llm:
+  base_url: "https://api.groq.com/openai/v1"
+  model: "llama-3.1-8b-instant"
+  api_key_env: "OPENAI_API_KEY"
+
+# --- Perfis ---
+# Cada perfil tem: nome, telegram, regras
+# Filtros: sobrescrevem os globais
+
+perfis:
+  - nome: "Climatizacao SP"
+    telegram:
+      chat_id: "SEU_CHAT_ID_AQUI"
+    filtros_globais:
+      ufs: ["SP"]
+      valor_minimo: 50000
+    regras:
+      - nome: "Climatizacao"
+        qualquer: ["climatizacao", "ar-condicionado", "hvac", "bombas de calor"]
+        excluir: ["locacao de imovel"]
+        destaque: ["preventiva", "registro de precos"]
+      - nome: "Refrigeracao Industrial"
+        qualquer: ["refrigeracao", "câmara fria", "freezer industrial"]
+
+  - nome: "Medicamentos BA"
+    telegram:
+      chat_id: "SEU_OUTRO_CHAT_ID"
+    filtros_globais:
+      ufs: ["BA"]
+      valor_minimo: 100000
+    regras:
+      - nome: "Medicamentos"
+        qualquer: ["medicamento", "farmaceutico", "remedio"]
+        excluir: ["distribuicao", "farmacia popular"]
+        destaque: ["oncologico", "hospitalar", "insumos"]
+
+  - nome: "TI Generico"
+    telegram:
+      chat_id: "SEU_CHAT_ID_TI"
+    filtros_globais:
+      ufs: []
+      valor_minimo: 20000
+    regras:
+      - nome: "Infraestrutura"
+        qualquer: ["servidor", "data center", "cloud", "storage"]
+        destaque: ["hibrido", "migracao"]
+      - nome: "Desenvolvimento"
+        qualquer: ["desenvolvimento", "software", "sistema"]
+        excluir: ["licenca"]

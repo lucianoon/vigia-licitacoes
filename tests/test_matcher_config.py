@@ -106,3 +106,126 @@ def test_config_validacao(tmp_path, dados: dict, esperado: bool) -> None:
     except (ValueError, FileNotFoundError):
         valido = False
     assert valido is esperado
+
+
+# ── Multi-perfil ──────────────────────────────────────────────
+
+
+def _escrever_config(tmp_path, dados):
+    import yaml
+
+    arquivo = tmp_path / "vigia.yaml"
+    arquivo.write_text(yaml.safe_dump(dados), encoding="utf-8")
+    return str(arquivo)
+
+
+def test_config_legacy_retorna_single_perfil(tmp_path):
+    dados = {
+        "telegram": {"chat_id": "111"},
+        "regras": [{"nome": "R1", "qualquer": ["x"]}],
+    }
+    caminho = _escrever_config(tmp_path, dados)
+    config = Config.carregar(caminho)
+    perfis = config.perfis_resolvidos()
+    assert len(perfis) == 1
+    assert perfis[0].nome == "Padrao"
+    assert perfis[0].telegram.chat_id == "111"
+    assert len(perfis[0].regras) == 1
+
+
+def test_config_multi_perfil(tmp_path):
+    dados = {
+        "filtros_globais": {"valor_minimo": 10000},
+        "perfis": [
+            {
+                "nome": "A",
+                "telegram": {"chat_id": "111"},
+                "regras": [{"nome": "R1", "qualquer": ["x"]}],
+            },
+            {
+                "nome": "B",
+                "telegram": {"chat_id": "222"},
+                "regras": [{"nome": "R2", "qualquer": ["y"]}],
+            },
+        ],
+    }
+    caminho = _escrever_config(tmp_path, dados)
+    config = Config.carregar(caminho)
+    perfis = config.perfis_resolvidos()
+    assert len(perfis) == 2
+    assert perfis[0].nome == "A"
+    assert perfis[1].nome == "B"
+    assert perfis[0].telegram.chat_id == "111"
+    assert perfis[1].telegram.chat_id == "222"
+
+
+def test_config_perfil_herda_filtros_globais(tmp_path):
+    dados = {
+        "filtros_globais": {"valor_minimo": 50000, "ufs": ["SP"]},
+        "perfis": [
+            {
+                "nome": "A",
+                "telegram": {"chat_id": "111"},
+                "regras": [{"nome": "R1", "qualquer": ["x"]}],
+            },
+        ],
+    }
+    caminho = _escrever_config(tmp_path, dados)
+    config = Config.carregar(caminho)
+    perfil = config.perfis_resolvidos()[0]
+    assert perfil.filtros_globais.valor_minimo == 50000
+    assert perfil.filtros_globais.ufs == ["SP"]
+
+
+def test_config_perfil_sobrescreve_filtros(tmp_path):
+    dados = {
+        "filtros_globais": {"valor_minimo": 50000, "ufs": ["SP"]},
+        "perfis": [
+            {
+                "nome": "A",
+                "telegram": {"chat_id": "111"},
+                "regras": [{"nome": "R1", "qualquer": ["x"]}],
+                "filtros_globais": {"ufs": ["RJ"], "valor_minimo": 200000},
+            },
+        ],
+    }
+    caminho = _escrever_config(tmp_path, dados)
+    config = Config.carregar(caminho)
+    perfil = config.perfis_resolvidos()[0]
+    assert perfil.filtros_globais.ufs == ["RJ"]
+    assert perfil.filtros_globais.valor_minimo == 200000
+
+
+def test_config_multi_perfil_legacy_e_perfis_coexistem(tmp_path):
+    """Se perfis esta presente, regras raiz sao ignoradas."""
+    dados = {
+        "telegram": {"chat_id": "999"},
+        "regras": [{"nome": "Old", "qualquer": ["z"]}],
+        "perfis": [
+            {
+                "nome": "Novo",
+                "telegram": {"chat_id": "111"},
+                "regras": [{"nome": "R1", "qualquer": ["x"]}],
+            },
+        ],
+    }
+    caminho = _escrever_config(tmp_path, dados)
+    config = Config.carregar(caminho)
+    perfis = config.perfis_resolvidos()
+    assert len(perfis) == 1
+    assert perfis[0].nome == "Novo"
+
+
+def test_config_multi_perfil_vazio_rejeitado(tmp_path):
+    dados = {
+        "perfis": [
+            {
+                "nome": "A",
+                "telegram": {"chat_id": "111"},
+                "regras": [],
+            },
+        ],
+    }
+    caminho = _escrever_config(tmp_path, dados)
+    with pytest.raises(ValueError, match="nenhuma regra"):
+        Config.carregar(caminho)
