@@ -1,0 +1,27 @@
+# Exemplo de configuração do Vigia — copie para vigia.yaml e ajuste
+perfil:
+  nome: "ACME Climatização"
+
+telegram:
+  chat_id: "123456789"
+
+filtros_globais:
+  ufs: ["SC", "PR"]
+  valor_minimo: 10000
+  # valor_maximo: 500000
+  modalidades: [6]          # códigos PNCP; 6 = Pregão Eletrônico
+  excluir_orgaos:
+    - "CAMARA MUNICIPAL"
+
+regras:
+  - nome: "Climatização"
+    qualquer:
+      - "climatização"
+      - "ar-condicionado"
+      - "hvac"
+      - "bombas de calor"
+    excluir:
+      - "locação de imóvel"
+    destaque:
+      - "preventiva"
+      - "registro de preços"

@@ -1,0 +1,56 @@
+[project]
+name = "vigia-licitacoes"
+version = "0.1.0"
+description = "Monitor inteligente de licitações do PNCP: regras YAML, resumo por LLM e alertas no Telegram"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "Luciano" }]
+keywords = ["licitacoes", "pncp", "compras-publicas", "telegram-bot", "monitoramento"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Other Audience",
+    "Natural Language :: Portuguese (Brazilian)",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "httpx>=0.28",
+    "pydantic>=2.10",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+vigia = "vigia.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "respx>=0.22",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "types-PyYAML>=6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vigia"]
