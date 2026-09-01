@@ -21,7 +21,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Sync dependencies
-        run: uv sync --dev
+        # --locked falha se o uv.lock estiver fora de sincronia com o pyproject:
+        # o CI testa exatamente o que a imagem Docker instala.
+        run: uv sync --dev --locked
 
       - name: Lint
         run: uv run ruff check .
@@ -31,3 +33,19 @@ jobs:
 
       - name: Tests
         run: uv run pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag vigia-licitacoes:ci .
+
+      # O container é um processo de ciclo único, sem porta. O smoke confirma
+      # que o entrypoint instalado pelo lockfile sobe e que as regras casam,
+      # sem precisar de vigia.yaml nem de tokens.
+      - name: Smoke test CLI
+        run: |
+          docker run --rm vigia-licitacoes:ci --help
+          docker run --rm vigia-licitacoes:ci test-regras "manutencao preventiva de ar-condicionado" || true
