@@ -1,11 +1,13 @@
 # vigia-licitacoes
 
-Monitor inteligente de licitacoes do **PNCP** (Portal Nacional de Contratacoes Publicas).
-Funciona para **qualquer segmento**: climatizacao, saude, TI, petroquimica, escritorio,
-construcao civil, alimentacao, e qualquer outro nicho que venda para o governo.
+*[English version](README.en.md)*
 
-Voce cadastra o que sua empresa vende em regras YAML; o Vigia varre as novas contratacoes,
-filtra, resume cada edital compativel e avisa no **Telegram** antes do prazo fechar.
+Monitor inteligente de licitações do **PNCP** (Portal Nacional de Contratações Públicas).
+Funciona para **qualquer segmento**: climatização, saúde, TI, petroquímica, escritório,
+construção civil, alimentação, e qualquer outro nicho que venda para o governo.
+
+Você cadastra o que sua empresa vende em regras YAML; o Vigia varre as novas contratações,
+filtra, resume cada edital compatível e avisa no **Telegram** antes do prazo fechar.
 
 ## Como funciona
 
@@ -20,18 +22,18 @@ PNCP (API aberta) -> cache local -> filtros -> suas regras YAML
 
 | Segmento | Exemplos de regras |
 |---|---|
-| Climatizacao / HVAC | ar-condicionado, bombas de calor, chiller, refrigeracao |
-| Saude / Farmaceutico | medicamento, insumo hospitalar, equipamento medico |
-| TI / Software | servidor, cloud, storage, desenvolvimento, licenca |
-| Petroquimica / Energia | combustivel, lubrificante, tubulacao, valvula |
-| Material de escritorio | papelaria, mobiliario, computador, impressora |
-| Construcao civil | obra, reforma, pavimentacao, eletrica, hidraulica |
-| Alimentacao | genero alimenticio, merenda, alimentacao escolar |
-| Servicos | limpeza, vigilancia, manutencao, consultoria |
+| Climatização / HVAC | ar-condicionado, bombas de calor, chiller, refrigeracao |
+| Saúde / Farmacêutico | medicamento, insumo hospitalar, equipamento médico |
+| TI / Software | servidor, cloud, storage, desenvolvimento, licença |
+| Petroquímica / Energia | combustível, lubrificante, tubulacao, válvula |
+| Material de escritório | papelaria, mobiliário, computador, impressora |
+| Construção civil | obra, reforma, pavimentacao, elétrica, hidráulica |
+| Alimentação | gênero alimentício, merenda, alimentação escolar |
+| Serviços | limpeza, vigilância, manutenção, consultoria |
 
 Basta criar regras YAML com as palavras-chave do seu segmento.
 
-## Instalacao
+## Instalação
 
 ```bash
 git clone https://github.com/lucianoon/vigia-licitacoes
@@ -39,7 +41,7 @@ cd vigia-licitacoes
 uv sync
 ```
 
-## Configuracao rapida (5 minutos)
+## Configuração rápida (5 minutos)
 
 1. Crie um bot com [@BotFather](https://t.me/BotFather) no Telegram e copie o token
 2. Descubra seu `chat_id` conversando com [@userinfobot](https://t.me/userinfobot)
@@ -60,13 +62,13 @@ uv run vigia run --dry-run
 
 Opcional (resumo por IA): `export OPENAI_API_KEY=...`
 
-## Deploy local (cron automatico)
+## Deploy local (cron automático)
 
 ```bash
 ./setup.sh
 ```
 
-O script configura cron para rodar as 7h, 12h e 18h.
+O script configura cron para rodar às 7h, 12h e 18h.
 
 ## Uso
 
@@ -96,9 +98,9 @@ uv run vigia dashboard
 
 ## Multi-perfil
 
-O Vigia suporta multiplos perfis num so arquivo. Util para:
-- Agencias que atendem varias empresas
-- Empresas com areas de compra diferentes
+O Vigia suporta múltiplos perfis num só arquivo. Útil para:
+- Agências que atendem várias empresas
+- Empresas com áreas de compra diferentes
 - Um mesmo time monitorando nichos distintos
 
 ```yaml
@@ -131,10 +133,10 @@ uv run vigia dashboard
 ```
 
 Mostra:
-- Historico de alertas por perfil
-- Top licitacoes por valor
-- Metricas (alertas enviados, taxa por regra)
-- Grafico de atividade semanal
+- Histórico de alertas por perfil
+- Top licitações por valor
+- Métricas (alertas enviados, taxa por regra)
+- Gráfico de atividade semanal
 
 ## Regras YAML
 
@@ -148,10 +150,10 @@ Cada regra tem:
 ```
 
 - `qualquer`: lista de termos. O item casa se QUALQUER termo aparecer no objeto
-- `excluir`: veto. Se QUALQUER termo aparecer, o match e descartado
-- `destaque`: bonus. Aumenta o score do match (mais urgencia)
+- `excluir`: veto. Se QUALQUER termo aparecer, o match é descartado
+- `destaque`: bônus. Aumenta o score do match (mais urgência)
 
-Exemplo: "manutencao preventiva de ar-condicionado" casa com:
+Exemplo: "manutenção preventiva de ar-condicionado" casa com:
 - `qualquer: ["ar-condicionado"]` ✅
 - `destaque: ["preventiva"]` ✅ (score maior)
 - `excluir: ["locacao"]` ❌ (veto)
@@ -188,16 +190,16 @@ Variáveis úteis:
 ## Roadmap
 
 - [x] v0.1 — poll PNCP, regras YAML, Telegram, dedup SQLite, LLM opcional
-- [x] Multi-perfil (varios perfis num so config, heranca de filtros)
-- [x] Urgencia +48h + lembretes
+- [x] Multi-perfil (vários perfis num só config, herança de filtros)
+- [x] Urgência +48h + lembretes
 - [x] Digest semanal consolidado
 - [x] Cache local PNCP (evita requests duplicados)
-- [x] Dashboard HTML (historico + metricas)
+- [x] Dashboard HTML (histórico + metricas)
 - [x] Alertas por WhatsApp via Evolution API
 - [ ] Multi-portal (Petronect, ComprasNet, BNB)
-- [ ] API REST para integracao
+- [ ] API REST para integração
 - [ ] Modo SaaS (multi-tenant com auth)
 
-## Licenca
+## Licença
 
 MIT
