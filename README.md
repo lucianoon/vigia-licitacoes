@@ -1,4 +1,6 @@
-# vigia-licitações
+# vigia-licitacoes
+
+*[English version](README.en.md)*
 
 Monitor inteligente de licitações do **PNCP** (Portal Nacional de Contratações Públicas).
 Funciona para **qualquer segmento**: climatização, saúde, TI, petroquímica, escritório,
