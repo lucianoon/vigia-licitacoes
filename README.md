@@ -1,5 +1,10 @@
 # vigia-licitacoes
 
+[![ci](https://github.com/lucianoon/vigia-licitacoes/actions/workflows/ci.yml/badge.svg)](https://github.com/lucianoon/vigia-licitacoes/actions/workflows/ci.yml)
+![license](https://img.shields.io/badge/license-MIT-green)
+![python](https://img.shields.io/badge/python-3.11+-blue)
+![tests](https://img.shields.io/badge/tests-36%2B-brightgreen)
+
 *[English version](README.en.md)*
 
 Monitor inteligente de licitações do **PNCP** (Portal Nacional de Contratações Públicas).
